@@ -1,0 +1,61 @@
+<VRTDataset rasterXSize="10560" rasterYSize="10560">
+  <SRS dataAxisToSRSAxisMapping="1,2">PROJCS["unknown",GEOGCS["unknown",DATUM["Unknown_based_on_GRS80_ellipsoid",SPHEROID["GRS 1980",6378137,298.257222101004,AUTHORITY["EPSG","7019"]]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]]],PROJECTION["Albers_Conic_Equal_Area"],PARAMETER["latitude_of_center",-12],PARAMETER["longitude_of_center",-54],PARAMETER["standard_parallel_1",-2],PARAMETER["standard_parallel_2",-22],PARAMETER["false_easting",5000000],PARAMETER["false_northing",10000000],UNIT["metre",1,AUTHORITY["EPSG","9001"]],AXIS["Easting",EAST],AXIS["Northing",NORTH]]</SRS>
+  <GeoTransform>  4.2080000000000000e+06,  1.0000000000000000e+01,  0.0000000000000000e+00,  1.0475200000000000e+07,  0.0000000000000000e+00, -1.0000000000000000e+01</GeoTransform>
+  <VRTRasterBand dataType="Int16" band="1">
+    <Metadata>
+      <MDI key="STATISTICS_APPROXIMATE">YES</MDI>
+      <MDI key="STATISTICS_MAXIMUM">3334</MDI>
+      <MDI key="STATISTICS_MEAN">232.72795732664</MDI>
+      <MDI key="STATISTICS_MINIMUM">53</MDI>
+      <MDI key="STATISTICS_STDDEV">162.86588680161</MDI>
+      <MDI key="STATISTICS_VALID_PERCENT">100</MDI>
+    </Metadata>
+    <NoDataValue>0</NoDataValue>
+    <ComplexSource resampling="nearest">
+      <SourceFilename relativeToVRT="0">/vsicurl/https://data.inpe.br/bdc/data/s2-16d/v2/015/014/2021/07/12/S2-16D_V2_015014_20210712_B04.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SourceProperties RasterXSize="10560" RasterYSize="10560" DataType="Int16" BlockXSize="512" BlockYSize="512" />
+      <SrcRect xOff="0" yOff="0" xSize="10560" ySize="10560" />
+      <DstRect xOff="0" yOff="0" xSize="10560" ySize="10560" />
+      <NODATA>0</NODATA>
+    </ComplexSource>
+  </VRTRasterBand>
+  <VRTRasterBand dataType="Int16" band="2">
+    <Metadata>
+      <MDI key="STATISTICS_APPROXIMATE">YES</MDI>
+      <MDI key="STATISTICS_MAXIMUM">2604</MDI>
+      <MDI key="STATISTICS_MEAN">381.51681309487</MDI>
+      <MDI key="STATISTICS_MINIMUM">111</MDI>
+      <MDI key="STATISTICS_STDDEV">117.36715672095</MDI>
+      <MDI key="STATISTICS_VALID_PERCENT">100</MDI>
+    </Metadata>
+    <NoDataValue>0</NoDataValue>
+    <ComplexSource resampling="nearest">
+      <SourceFilename relativeToVRT="0">/vsicurl/https://data.inpe.br/bdc/data/s2-16d/v2/015/014/2021/07/12/S2-16D_V2_015014_20210712_B03.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SourceProperties RasterXSize="10560" RasterYSize="10560" DataType="Int16" BlockXSize="512" BlockYSize="512" />
+      <SrcRect xOff="0" yOff="0" xSize="10560" ySize="10560" />
+      <DstRect xOff="0" yOff="0" xSize="10560" ySize="10560" />
+      <NODATA>0</NODATA>
+    </ComplexSource>
+  </VRTRasterBand>
+  <VRTRasterBand dataType="Int16" band="3">
+    <Metadata>
+      <MDI key="STATISTICS_APPROXIMATE">YES</MDI>
+      <MDI key="STATISTICS_MAXIMUM">1932</MDI>
+      <MDI key="STATISTICS_MEAN">230.82133145068</MDI>
+      <MDI key="STATISTICS_MINIMUM">84</MDI>
+      <MDI key="STATISTICS_STDDEV">90.118234310024</MDI>
+      <MDI key="STATISTICS_VALID_PERCENT">100</MDI>
+    </Metadata>
+    <NoDataValue>0</NoDataValue>
+    <ComplexSource resampling="nearest">
+      <SourceFilename relativeToVRT="0">/vsicurl/https://data.inpe.br/bdc/data/s2-16d/v2/015/014/2021/07/12/S2-16D_V2_015014_20210712_B02.tif</SourceFilename>
+      <SourceBand>1</SourceBand>
+      <SourceProperties RasterXSize="10560" RasterYSize="10560" DataType="Int16" BlockXSize="512" BlockYSize="512" />
+      <SrcRect xOff="0" yOff="0" xSize="10560" ySize="10560" />
+      <DstRect xOff="0" yOff="0" xSize="10560" ySize="10560" />
+      <NODATA>0</NODATA>
+    </ComplexSource>
+  </VRTRasterBand>
+</VRTDataset>
