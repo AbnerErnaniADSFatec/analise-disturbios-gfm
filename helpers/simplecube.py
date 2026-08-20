@@ -1,0 +1,738 @@
+import urllib
+import requests
+from datetime import datetime
+from scipy.signal import savgol_filter
+from scipy import interpolate as scipy_interpolate
+from tqdm import tqdm
+import xarray as xr
+import pandas as pd
+import numpy as np
+import os, glob
+import zipfile
+import pandas as pd
+import rasterio
+import fsspec
+import json
+import rioxarray
+import calendar
+import pyproj
+from json import load
+import tempfile
+from pyproj import Transformer
+from pystac_client import Client
+from shapely.ops import transform
+import shapely
+from shapely.geometry import box
+from shapely.geometry import shape
+import matplotlib.pyplot as plt
+
+fs = fsspec.filesystem('https')
+
+import warnings
+warnings.filterwarnings("ignore", 
+                       message="invalid value encountered in cast",
+                       category=RuntimeWarning,
+                       module="xarray.core.duck_array_ops")
+
+warnings.filterwarnings('ignore', category=RuntimeWarning)
+
+cloud_dict = {
+    'S2-16D-2':{
+        'cloud_band': 'SCL',
+        'non_cloud_values': [4,5,6],
+        'cloud_values': [0,1,2,3,7,8,9,10,11]
+    },
+    'S2_L2A-1':{
+        'cloud_band': 'SCL',
+        'non_cloud_values': [4,5,6],
+        'cloud_values': [0,1,2,3,7,8,9,10,11]
+    },
+    'LANDSAT-16D-1':{
+        'cloud_band': 'qa_pixel',
+        'non_cloud_values': [6,7],
+        'cloud_values': [0,1,2,3,4,5]
+    },
+    'landsat-2':{
+        'cloud_band': 'qa_pixel',
+        'non_cloud_values': [6,7],
+        'cloud_values': [0,1,2,3,4,5]
+    },
+    'AMZ1-WFI-L4-SR-1':{
+        'cloud_band': 'CMASK',
+        'non_cloud_values': [127],
+        'cloud_values': [255, 0],
+        'no_data_value': 0
+    },
+    'CBERS-WFI-8D-1':{
+        'cloud_band': 'CMASK',
+        'non_cloud_values': [127],
+        'cloud_values': [255, 0],
+        'no_data_value': 0
+    }
+}
+
+bands_dict_names = {
+  "S2": {
+    "B01": { "name": "coastal" },
+    "B02": { "name": "blue" },
+    "B03": { "name": "green" },
+    "B04": { "name": "red" },
+    "B05": { "name": "red-edge-1" },
+    "B06": { "name": "red-edge-2" },
+    "B07": { "name": "red-edge-3" },
+    "B08": { "name": "nir" },
+    "B8A": { "name": "narrow-nir" },
+    "B09": { "name": "water-vapour" },
+    "B10": { "name": "swir-cirrus" },
+    "B11": { "name": "swir-1" },
+    "B12": { "name": "swir-2" },
+    "NDVI": { "name": "ndvi" },
+    "EVI": { "name": "evi" },
+    "NBR": { "name": "nbr" },
+    "SCL": { "name": "scl" },
+  },
+ "SAMET":{
+     "tmax": { "name": "tmax" },
+     "tmin": { "name": "tmin" },
+     "tmean": { "name": "tmean" },
+     "thumbnail": { "name": "thumbnail" }
+ },
+ "CBERS":{
+    "BAND13": { "name": "blue" },
+    "BAND14": { "name": "green" },
+    "BAND15": { "name": "red" },
+    "BAND16": { "name": "nir" },
+    "CLEAROB": { "name": "clear-observation" },
+    "TOTALOB": { "name": "total-observation" },
+    "EVI": { "name": "evi" },
+    "NDVI": { "name": "ndvi" },
+    "CMASK": { "name": "cmask" }
+ }
+}
+
+coverage_proj = pyproj.CRS.from_wkt('''
+    PROJCS["unknown",
+        GEOGCS["unknown",
+            DATUM["Unknown based on GRS80 ellipsoid",
+                SPHEROID["GRS 1980",6378137,298.257222101,
+                    AUTHORITY["EPSG","7019"]]],
+            PRIMEM["Greenwich",0,
+                AUTHORITY["EPSG","8901"]],
+            UNIT["degree",0.0174532925199433,
+                AUTHORITY["EPSG","9122"]]],
+        PROJECTION["Albers_Conic_Equal_Area"],
+        PARAMETER["latitude_of_center",-12],
+        PARAMETER["longitude_of_center",-54],
+        PARAMETER["standard_parallel_1",-2],
+        PARAMETER["standard_parallel_2",-22],
+        PARAMETER["false_easting",5000000],
+        PARAMETER["false_northing",10000000],
+        UNIT["metre",1,
+        AUTHORITY["EPSG","9001"]],
+        AXIS["Easting",EAST],
+        AXIS["Northing",NORTH]]''')
+
+
+def save_xarray(ds, filename):
+    if isinstance(ds, xr.DataArray):
+        ds = ds.to_dataset(name='dataarray')
+        ds.attrs['_xarray_type'] = 'DataArray'
+    ds.to_netcdf(filename)
+    print(f"xarray object saved to {filename}")
+
+
+def load_xarray(filename, decode_times=False):
+    ds = xr.open_dataset(filename, decode_times=decode_times)
+    if '_xarray_type' in ds.attrs and ds.attrs['_xarray_type'] == 'DataArray':
+        da = ds['dataarray']
+        da.attrs = {k: v for k, v in ds.attrs.items() if k != '_xarray_type'}
+        ds.close()
+        return da
+    else:
+        return ds
+    
+    
+def collection_query(collection, start_date, end_date, tile=None, bbox=None, freq=None, bands=None):
+    """An object that contains the information associated with a collection 
+    that can be downloaded or acessed.
+
+    Args:
+        collection : String containing a collection id.
+
+        start_date String containing the start date of the associated collection. Following YYYY-MM-DD structure.
+
+        end_date : String containing the start date of the associated collection. Following YYYY-MM-DD structure.
+
+        freq : Optional, string containing the frequency of images of the associated collection. Following (days)D structure. 
+
+        bands : Optional, string containing the list bands id.
+    """
+
+    return dict(
+        collection = collection,
+        bands = bands,
+        start_date = start_date,
+        tile = tile,
+        bbox = bbox,
+        end_date = end_date
+    )
+
+
+def download_stream(file_path: str, response, chunk_size=1024*64, progress=True, offset=0, total_size=None):
+    """Download request stream data to disk.
+
+    Args:
+        file_path - Absolute file path to save
+        response - HTTP Response object
+    """
+    parent = os.path.dirname(file_path)
+
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    if not total_size:
+        total_size = int(response.headers.get('Content-Length', 0))
+
+    file_name = os.path.basename(file_path)
+
+    progress_bar = tqdm(
+        desc=file_name[:30]+'... ',
+        total=total_size,
+        unit="B",
+        unit_scale=True,
+        #disable=not progress,
+        initial=offset,
+        disable=True
+    )
+
+    mode = 'a+b' if offset else 'wb'
+
+    # May throw exception for read-only directory
+    with response:
+        with open(file_path, mode) as stream:
+            for chunk in response.iter_content(chunk_size):
+                stream.write(chunk)
+                progress_bar.update(chunk_size)
+
+    #file_size = os.stat(file_path).st_size
+
+    #if file_size != total_size:
+    #    os.remove(file_path)
+    #    raise IOError(f'Download file is corrupt. Expected {total_size} bytes, got {file_size}')
+
+
+def create_filter_array(array, filter_true, filter_false):
+    filter_arr = []
+    for element in array:
+        if element in filter_true:
+            filter_arr.append(0)
+        if element in filter_false:
+            filter_arr.append(1)
+    return filter_arr
+
+
+def smooth_timeseries(ts, method='savitsky', window_length=3, polyorder=1):
+    if (method=='savitsky'):
+        smooth_ts = savgol_filter(x=ts, window_length=window_length, polyorder=polyorder)
+    return smooth_ts
+
+
+def get_timeseries_datacube(datacube, geom, band):
+    
+    if "latitude" in datacube.coords:
+        band_ts = datacube.sel(latitude=geom[0]['coordinates'][0], longitude=geom[0]['coordinates'][1], method='nearest')[band].values
+    elif "lat" in datacube.coords:
+        band_ts = datacube.sel(lat=geom[0]['coordinates'][0], lon=geom[0]['coordinates'][1], method='nearest')[band].values
+    else:
+        band_ts = datacube.sel(x=geom[0]['coordinates'][0], y=geom[0]['coordinates'][1], method='nearest')[band].values
+    timeline = datacube.coords['time'].values
+    ts = []
+    for value in band_ts:
+        ts.append(value)
+    return dict(values=ts, timeline=timeline)
+
+
+def unzip():
+    for z in glob.glob("*.zip"):
+        try:
+            with zipfile.ZipFile(os.path.join(z), 'r') as zip_ref:
+                #print('Unziping '+ z)
+                zip_ref.extractall('unzip')
+                os.remove(z)
+        except:
+            #print("An exception occurred")
+            os.remove(z)
+
+
+def geometry_collides_with_bbox(geometry,input_bbox):
+    """
+    Check if a Shapely geometry collides with a bounding box.
+    
+    Args:
+        geometry: A Shapely geometry object (Polygon, LineString, Point, etc.)
+        bbox: A tuple in (minx, miny, maxx, maxy) format
+        
+    Returns:
+        bool: True if the geometry intersects with the bbox, False otherwise
+    """
+    # Create a Polygon from the bbox
+    bbox_polygon = box(*input_bbox)
+    
+    # Check for intersection
+    return geometry.intersects(bbox_polygon)
+
+
+def filter_scenes(collection, data_dir, bbox):
+    """
+    Return scenes from data_dir where the geometry collides with the bounding box.
+    
+    Args:
+        collection: A string with BDC collection id
+        data_dir: A string with directory
+        bbox: A tuple in (minx, miny, maxx, maxy) format
+        
+    Returns:
+        list: Scenes filtered by when geometry collides with the bounding box.
+    """
+    
+    # Collection Metadata
+    collection_metadata = load(open(os.path.join(data_dir, collection, str(collection+".json")), 'r', encoding='utf-8'))
+    
+    list_dir = [item for item in os.listdir(os.path.join(data_dir, collection))
+            if os.path.isdir(os.path.join(data_dir, collection, item))]
+    
+    filtered_list = []
+    
+    for scene in list_dir:
+        try:
+            item = [item for item in collection_metadata['geoms'] if item["tile"] == scene]
+            if (geometry_collides_with_bbox(shape(item[0]['geometry']), bbox)):
+                filtered_list.append(item[0]['tile'])   
+        except:
+            pass
+        
+    return filtered_list
+
+
+def local_simple_cube(collection, data_dir, source, bands, tile, bbox):
+    for i in range(len(bands)):
+        search_bbox = tuple(map(float, bbox.split(',')))
+        
+        sample_image_path = os.path.join(data_dir, collection, tile, bands[i])
+    
+        list_dir = [item for item in os.listdir(sample_image_path)]    
+
+        with rasterio.open(os.path.join(sample_image_path, list_dir[0])) as src:
+            data_proj = src.crs
+        
+        proj_converter = Transformer.from_crs(pyproj.CRS.from_epsg(4326), data_proj, always_xy=True).transform
+
+        bbox_polygon = box(*search_bbox)
+        reproj_bbox = transform(proj_converter, bbox_polygon)
+        
+        list_da = []
+        for image in os.listdir(os.path.join(data_dir, collection, tile, bands[i])):
+            da = xr.open_dataarray(os.path.join(data_dir, collection, tile, bands[i], image), engine='rasterio')
+            da = da.rio.clip_box(*reproj_bbox.bounds)  
+            if (source == 'bdc'):
+                time = image.split("_")[-2]
+                dt = datetime.strptime(time, '%Y%m%d') 
+            if (source == 'bdc-amz'):
+                time = image.split("_")[3]
+                dt = datetime.strptime(time, '%Y%m%d') 
+            if (source == 'esa'):
+                time = image.split("_")[2].split('T')[0]
+                dt = datetime.strptime(time, '%Y%m%d')
+            if (source == 'nasa'):
+                time = image.split(".")[3]
+                dt = datetime.strptime(time, '%Y%jT%H%M%S')
+            if (source == 'microsoft'):
+                time = image.split("_")[4]
+                dt = datetime.strptime(time, '%Y%m%dT%H%M%S')
+            dt = pd.to_datetime(dt)
+            da = da.assign_coords(time = dt)
+            da = da.expand_dims(dim="time")
+            da.attrs = {}
+            list_da.append(da)
+
+        band_cube = xr.combine_by_coords(list_da)   
+        band_cube = band_cube.rename({'band_data': bands[i]})
+        
+        if i == 0:
+            data_cube = band_cube
+        else:
+            data_cube = xr.merge([data_cube, band_cube])
+    
+    return data_cube
+
+
+def name_band(collection, band_id):
+    standardized_name = collection.lower().replace('_', '-')
+    code = standardized_name.upper().split('-')[0]
+    return bands_dict_names[code][band_id]['name']
+
+
+def simple_cube_download(stac_url, data_dir, collection, start_date, end_date, tile=None, bbox=None, freq=None, bands=None):
+    
+    stac = Client.open(stac_url)
+
+    collection=dict(
+        collection=collection, 
+        start_date=start_date,
+        end_date=end_date,    
+        bbox=bbox,
+        bands=bands
+    )
+    
+    if collection['collection'] not in ['landsat-2', 'LANDSAT-16D-1', 'S2-16D-2', 'S2_L2A-1', 'CBERS-WFI-8D-1']:
+        return print(f"{collection['collection']} collection not yet supported.")
+    
+    collection_get_data(stac, collection, data_dir)
+                
+    bbox = tuple(map(float, collection['bbox'].split(',')))
+    
+    scenes = filter_scenes(collection['collection'], data_dir, bbox)
+    
+    sample_image_path = os.path.join(data_dir, collection['collection'], scenes[0], bands[0])
+   
+    list_dir = [item for item in os.listdir(sample_image_path)]       
+    with rasterio.open(os.path.join(sample_image_path, list_dir[0])) as src:
+        data_proj = src.crs
+    
+    proj_converter = Transformer.from_crs(pyproj.CRS.from_epsg(4326), data_proj, always_xy=True).transform
+
+    bbox_polygon = box(*bbox)
+    reproj_bbox = transform(proj_converter, bbox_polygon)
+    
+    list_da = []
+    for i in range(len(bands)):
+        for image in os.listdir(os.path.join(data_dir, collection['collection'], scenes[0], bands[i])):
+            da = xr.open_dataarray(os.path.join(data_dir, collection['collection'], scenes[0], bands[i], image), engine='rasterio')
+            da = da.astype('int16')
+            try:
+                da = da.rio.clip_box(*reproj_bbox.bounds)  
+                if (collection['collection'] == "AMZ1-WFI-L4-SR-1"):
+                    time = image.split("_")[3]
+                    dt = datetime.strptime(time, '%Y%m%d') 
+                if (collection['collection'] == "AMZ1-WFI-L4-SR-1"):
+                    time = image.split("_")[3]
+                    dt = datetime.strptime(time, '%Y%m%d') 
+                if (collection['collection'] == "S2_L2A-1"):
+                    time = image.split("_")[2].split('T')[0]
+                    dt = datetime.strptime(time, '%Y%m%d')
+                if (collection['collection'] == "S2-16D-2"):
+                    time = image.split("_")[3]
+                    dt = datetime.strptime(time, '%Y%m%d')
+                if (collection['collection'] == "LANDSAT-16D-1" or "landsat-2"):
+                    time = image.split("_")[3]
+                    dt = datetime.strptime(time, '%Y%m%d')
+                else:
+                    time = image.split("_")[-2]
+                    dt = datetime.strptime(time, '%Y%m%d') 
+                dt = pd.to_datetime(dt)
+                da = da.assign_coords(time = dt)
+                da = da.expand_dims(dim="time")
+                list_da.append(da)
+            except:
+                pass
+        if (i==0):
+            data_cube = xr.combine_by_coords(list_da)
+            data_cube = data_cube.rename({'band_data': name_band(collection['collection'], bands[i])})
+        else:
+            band_data_array = xr.combine_by_coords(list_da)
+            band_data_array = band_data_array.rename({'band_data': name_band(collection['collection'], bands[i])})
+            data_cube = xr.merge([data_cube, band_data_array])
+
+    return data_cube
+
+
+def interpolate_array(array):
+    if len(array) == 0:
+        return []
+    array = np.array([np.nan if item == -9999 else item for item in array])
+    inds = np.arange(len(array))
+    good = np.where(np.isfinite(array))
+    f = scipy_interpolate.interp1d(inds[good],array[good],bounds_error=False)
+    return_array = np.where(np.isfinite(array),array,f(inds))
+    return return_array.tolist()
+
+
+def collection_get_list(stac, datacube):
+
+    collection = datacube['collection']
+    bbox = datacube['bbox']
+    start_date = datacube['start_date']
+    end_date = datacube['end_date']
+    bands = datacube['bands'] 
+
+    if (datacube['bbox']):
+        item_search = stac.search(
+            collections=[collection],
+            datetime=start_date+"T00:00:00Z/"+end_date+"T23:59:00Z",
+            bbox=bbox,
+            limit=365
+        )
+        
+    band_dict = {}
+    for band in bands:
+        band_dict[band] = []
+
+    for item in tqdm(desc='Fetching... ', unit=" scenes", total=item_search.matched(), iterable=item_search.items()):
+        for band in bands:
+            asset = item.assets.get(band)
+            if asset and hasattr(asset, 'href'):
+                band_dict[band].append(asset.href)
+
+    return band_dict
+  
+
+def collection_get_data(stac, datacube, data_dir):
+    
+    collection = datacube['collection']
+    bbox = datacube['bbox']
+    start_date = datacube['start_date']
+    end_date = datacube['end_date']
+    bands = datacube['bands'] #+ [cloud_dict[collection]['cloud_band']]
+
+    if (datacube['bbox']):
+        item_search = stac.search(
+            collections=[collection],
+            datetime=start_date+"T00:00:00Z/"+end_date+"T23:59:00Z",
+            bbox=bbox
+        )
+        
+    tiles = []
+    for item in item_search.items():
+        if (collection=="AMZ1-WFI-L4-SR-1"):
+            tile = item.id.split("_")[4]+'_'+item.id.split("_")[5]
+            if tile not in tiles:
+                tiles.append(tile)
+        if (collection=="S2_L2A-1"):
+            tile = item.id.split("_")[5][1:]
+            if tile not in tiles:
+                tiles.append(tile)
+        if (collection=="LANDSAT-16D-1" or "landsat-2" or "S2-16D-2"):
+            tile = item.id.split("_")[2]
+            if tile not in tiles:
+                tiles.append(tile)
+                
+    for tile in tiles:
+        #print(data_dir+"/"+collection+"/"+tile)      
+        if not os.path.exists(data_dir+"/"+collection+"/"+tile):
+            os.makedirs(data_dir+"/"+collection+"/"+tile)
+        for band in bands:
+            if not os.path.exists(data_dir+"/"+collection+"/"+tile+"/"+band):
+                os.makedirs(data_dir+"/"+collection+"/"+tile+"/"+band)
+
+    geom_map = []
+    download = False
+
+    for item in tqdm(desc='Downloading... ', unit=" scenes", total=item_search.matched(), iterable=item_search.items()):
+        for band in bands:
+            if (collection=="AMZ1-WFI-L4-SR-1"):
+                tile = item.id.split("_")[4]+'_'+item.id.split("_")[5]
+            if (collection=="S2_L2A-1"):
+                tile = item.id.split("_")[5][1:]
+            if (collection=="LANDSAT-16D-1" or "landsat-2" or "S2-16D-2"):
+                tile = item.id.split("_")[2]
+
+            response = requests.get(item.assets[band].href, stream=True)
+            if not any(tile_dict["tile"] == tile for tile_dict in geom_map):
+                geom_map.append(dict(tile=tile, geometry=item.geometry))
+            if(os.path.exists(os.path.join(data_dir+"/"+collection+"/"+tile+"/"+band, os.path.basename(item.assets[band].href)))):
+                download = False
+            else:
+                download = True
+                download_stream(os.path.join(data_dir+"/"+collection+"/"+tile+"/"+band, os.path.basename(item.assets[band].href)), response, total_size=item.to_dict()['assets'][band]["bdc:size"])
+    
+    if(download):
+        file_name = collection+".json"
+        with open(os.path.join(data_dir+"/"+collection+"/"+file_name), 'w') as json_file:
+            json.dump(dict(collection=collection, geoms=geom_map), json_file, indent=4)
+
+    print(f"Successfully download {item_search.matched()} scenes to {os.path.join(collection)}")
+
+
+def simple_cube(stac_url, collection, start_date, end_date, tile=None, bbox=None, freq=None, bands=None):
+    
+    stac = Client.open(stac_url)
+
+    collection_name = collection
+
+    collection_dict=dict(
+        collection=collection_name, 
+        start_date=start_date,
+        end_date=end_date,    
+        bbox=bbox,
+        bands=bands
+    )
+
+    if collection_name not in ['CBERS-WFI-8D-1', 'landsat-2', 'LANDSAT-16D-1', 'S2-16D-2', 'S2_L2A-1', 'samet_daily-1', 'prec_merge_daily-1']:
+        return print(f"{collection_name} collection not yet supported.")
+    
+    bands_dict = collection_get_list(stac, collection_dict)
+                
+    bbox = tuple(map(float, collection_dict['bbox'].split(',')))
+    
+    sample_image_path = bands_dict[bands[0]][0]
+    
+    if (collection_name == "samet_daily-1" or collection_name == "prec_merge_daily-1"):
+        data_proj = pyproj.CRS.from_epsg(4326)
+    else:
+        with rasterio.open(sample_image_path) as src:
+            data_proj = src.crs
+        
+    proj_converter = Transformer.from_crs(pyproj.CRS.from_epsg(4326), data_proj, always_xy=True).transform
+
+    bbox_polygon = box(*bbox)
+    reproj_bbox = transform(proj_converter, bbox_polygon)
+    
+    list_da = []
+
+    if (collection_name == "prec_merge_daily-1"): 
+        data_cube = xr.Dataset()
+        for i in range(len(bands)):
+            for image in bands_dict[bands[i]]:
+                try:
+                    with tempfile.NamedTemporaryFile() as tmp:
+                        fs.get(image, tmp.name)
+                        ds = xr.open_dataset(tmp.name, engine='cfgrib')
+                        ds_dropped = ds.drop_vars("prmsl")
+                        del ds_dropped.attrs['GRIB_edition']
+                        del ds_dropped.attrs['GRIB_centre']
+                        del ds_dropped.attrs['GRIB_centreDescription']
+                        del ds_dropped.attrs['GRIB_subCentre']
+                        del ds_dropped.attrs['Conventions']
+                        del ds_dropped.attrs['institution']
+                        del ds_dropped.attrs['history']
+                        ds_dropped = ds_dropped.drop_vars(['valid_time'])
+                        ds_dropped = ds_dropped.drop_vars(['surface'])
+                        ds_dropped = ds_dropped.drop_vars(['time'])
+                        ds_dropped = ds_dropped.drop_vars(['step'])
+                        time = image.split("/")[-1].split('.')[0].split("_")[2]
+                        dt = datetime.strptime(time, '%Y%m%d') 
+                        dt = pd.to_datetime(dt)
+                        da = ds_dropped.assign_coords(time = dt)
+                        da = da.expand_dims(dim="time")
+                        list_da.append(da)
+                except:
+                    pass
+            data_cube = xr.combine_by_coords(list_da)
+
+    elif (collection_name == "samet_daily-1"): 
+        data_cube = xr.Dataset()
+        for i in range(len(bands)):
+            for image in bands_dict[bands[i]]:
+                f = fs.open(image)
+                ds = xr.open_dataset(f)
+                
+                min_lon, min_lat, max_lon, max_lat = map(float, collection['bbox'].split(','))
+                bbox = {
+                    'min_lon': min_lon,
+                    'max_lon': max_lon,
+                    'min_lat': min_lat,
+                    'max_lat': max_lat
+                }
+
+                clipped_ds = ds.sel(
+                    lon=slice(bbox['min_lon'], bbox['max_lon']),
+                    lat=slice(bbox['min_lat'], bbox['max_lat'])
+                )
+
+                ds_dropped = clipped_ds.drop_vars("nobs")
+                data_cube = xr.merge([data_cube, ds_dropped])
+    
+    else:
+        for i in range(len(bands)):
+            for image in bands_dict[bands[i]]:
+                da = xr.open_dataarray(image, engine='rasterio')
+                da = da.astype('int16')
+                try:
+                    da = da.rio.clip_box(*reproj_bbox.bounds)
+                    image = image.split('/')[-1]
+                    if (collection_name == "AMZ1-WFI-L4-SR-1" or collection_name == "S2-16D-2" or collection_name == "LANDSAT-16D-1" or collection_name == "landsat-2"):
+                        time = image.split("_")[3]
+                        dt = datetime.strptime(time, '%Y%m%d') 
+                    elif (collection_name == "S2_L2A-1"):
+                        time = image.split("_")[2].split('T')[0]
+                        dt = datetime.strptime(time, '%Y%m%d')
+                    elif (collection_name == "CBERS-WFI-8D-1"):
+                        time = image.split("_")[6]
+                        dt = datetime.strptime(time, '%Y-%m-%d') 
+                    else:
+                        time = image.split("_")[-2]
+                        dt = datetime.strptime(time, '%Y%m%d') 
+                    dt = pd.to_datetime(dt)
+                    da = da.assign_coords(time = dt)
+                    da = da.expand_dims(dim="time")
+                    list_da.append(da)
+                except:
+                    pass
+            if (i==0):
+                data_cube = xr.combine_by_coords(list_da)
+                data_cube = data_cube.rename({'band_data': name_band(collection_name, bands[i])})
+            else:
+                band_data_array = xr.combine_by_coords(list_da)
+                band_data_array = band_data_array.rename({'band_data': name_band(collection_name, bands[i])})
+                data_cube = xr.merge([data_cube, band_data_array])
+
+    return data_cube
+
+def s1_ts(ds, lat, lon, band='vv'):
+    """
+    Extracts a time series dictionary for a specific band at a Lat/Lon point.
+    Returns: {'values': [...], 'timeline': [...]}
+    """
+    
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:32721", always_xy=True)
+    x_utm, y_utm = transformer.transform(lon, lat)
+    
+
+    point_ds = ds.sel(x=x_utm, y=y_utm, method="nearest").squeeze()
+    
+    band_ts = point_ds[band].values
+    timeline = pd.to_datetime(ds.coords['time'].values, unit='ns').strftime('%Y-%m-%d')
+    
+    return {
+        "values": band_ts.tolist(), 
+        "timeline": timeline.tolist()
+    }
+
+def s1_plot(S1_cube, time_str):
+    """
+    Takes an xarray Dataset of Sentinel-1 SAR data and a time string,
+    calculates a custom RGB composite, and plots the result.
+    """
+    # Select the specific time and remove dummy dimensions
+    ds_t = S1_cube.sel(time=time_str).squeeze()
+
+    # Extract polarization values
+    vv = ds_t['vv'].values
+    vh = ds_t['vh'].values
+
+    # Calculate RGB bands while ignoring divide-by-zero or log-of-negative warnings
+    with np.errstate(divide='ignore', invalid='ignore'):
+        red = 0.03 + np.log(1e-3 - np.log(0.05 / (0.02 + 2 * vv)))
+        green = 0.05 + np.exp(0.25 * (np.log(0.01 + 2 * vv) + np.log(0.02 + 5 * vh)))
+        blue = 1 - np.log(0.05 / (0.045 - 0.9 * vv))
+
+    # Normalize bands
+    red_norm = np.clip(red, 0, 0.8) / 0.8
+    green_norm = np.clip(green, 0, 1.0)
+    blue_norm = np.clip(blue, 0, 1.0)
+
+    # Stack into an RGB array and replace NaNs with 0
+    rgb = np.dstack((red_norm, green_norm, blue_norm))
+    rgb = np.nan_to_num(rgb, nan=0.0)
+
+    # Plot the result
+    fig, ax = plt.subplots(figsize=(7, 7))
+
+    ax.imshow(rgb, origin='upper')
+    ax.set_title(f'SAR RGB Composite - {time_str}')
+    ax.set_xlabel('X Coordinate')
+    ax.set_ylabel('Y Coordinate')
+
+    plt.tight_layout()
+    plt.show()
+    
