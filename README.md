@@ -35,6 +35,8 @@ pip uninstall -y geemap
 
 ```
 pip install geotessera geopandas shapely
+
+pip install localtileserver
 ```
 
 #### Raster path with downloaded data
