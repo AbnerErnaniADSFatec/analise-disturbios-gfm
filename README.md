@@ -29,6 +29,8 @@ pip install --upgrade --user geemap xyzservices python-box uninstall -y geemap
 
 pip uninstall -y geemap
 
+pip install rasterio
+
 ```
 
 #### Tessera

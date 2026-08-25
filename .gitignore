@@ -219,3 +219,6 @@ __marimo__/
 
 # Heavy rasters
 dataset/rasters
+
+# Tessera Cache
+global_*/
