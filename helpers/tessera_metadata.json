@@ -1,0 +1,10 @@
+{
+  "dataset_path": "v1",
+  "dataset_variant": "vultr",
+  "dataset_version": "1.0",
+  "dataset_version_path": "v1",
+  "embeddings_subdir": "global_0.1_degree_representation",
+  "generated_at": "2026-08-27T18:19:44.734119+00:00",
+  "s3_embeddings_subdir": "global_0.1_degree_representation",
+  "source_url_prefix": "https://data.source.coop/tessera/tessera/npy/v1/"
+}

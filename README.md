@@ -41,6 +41,12 @@ pip install geotessera geopandas shapely
 pip install localtileserver
 ```
 
+#### RS Embed for Python >= 3.12
+
+```
+pip install git+https://github.com/cybergis/rs-embed
+```
+
 #### Raster path with downloaded data
 
 (https://drive.google.com/drive/folders/14b_a2CKy_UOXCB3XebwXwvMpVxpOL7uw?usp=sharing)[https://drive.google.com/drive/folders/14b_a2CKy_UOXCB3XebwXwvMpVxpOL7uw?usp=sharing]
