@@ -22,6 +22,7 @@ from rasterio.transform import Affine
 from scipy.signal import savgol_filter
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import MinMaxScaler, RobustScaler
+from shapely.geometry import Point, MultiPolygon
 
 from helpers.simplecube import load_xarray, save_xarray, simple_cube
 
@@ -378,10 +379,10 @@ def extract_sits_samples(
   print(f"Total de amostras/pixels extraídos: {len(df_sits)}")
   return df_sits
 
-
-
 def plot_ts(data_df, selected_line, marker=True, smoothed=False, step=5):
-    ts = pd.DataFrame(json.loads(data_df['time_series'][selected_line]))
+    item = data_df['time_series'][selected_line]
+    ts = item if isinstance(data_df, dict) else eval(item)
+    ts = pd.DataFrame(ts)
     fig = plt.figure(figsize=(10, 4))
     smoothed_ = ' Smoothed' if smoothed else ''
     fig.suptitle(

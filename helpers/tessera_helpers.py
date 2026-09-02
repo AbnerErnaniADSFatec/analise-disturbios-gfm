@@ -20,11 +20,12 @@ from pyproj import Transformer
 from rasterio.features import rasterize
 from rasterio.transform import Affine, from_bounds
 from rioxarray.merge import merge_arrays
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import MinMaxScaler, RobustScaler
 from shapely.geometry import Point
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import MinMaxScaler, RobustScaler, normalize
 
-def create_tessera_mosaic(year: int, bbox: list[float]) -> xr.DataArray:
+
+def create_tessera_mosaic(gt_object, year: int, bbox: list[float]) -> xr.DataArray:
   """Monta o mosaico Tessera a partir dos arquivos salvos localmente,
 
   reprojeta para WGS84 e recorta para o bbox solicitado.
@@ -37,8 +38,8 @@ def create_tessera_mosaic(year: int, bbox: list[float]) -> xr.DataArray:
       xr.DataArray: Mosaico final recortado na área de interesse em EPSG:4326.
   """
   # 1. Busca todos os blocos dentro do bbox global
-  tiles_to_fetch = gt.registry.load_blocks_for_region(bounds=bbox, year=year)
-  tiles = gt.fetch_embeddings(tiles_to_fetch)
+  tiles_to_fetch = gt_object.registry.load_blocks_for_region(bounds=bbox, year=year)
+  tiles = gt_object.fetch_embeddings(tiles_to_fetch)
 
   if not tiles:
     raise ValueError(
@@ -99,6 +100,131 @@ def create_tessera_mosaic(year: int, bbox: list[float]) -> xr.DataArray:
 
   return tessera_mosaic_embeddings
 
+def harmonize_by_tile_embeddings(da: xr.DataArray, tile_corrections: list[dict]) -> xr.DataArray:
+    """Corrige artefatos de média em múltiplos blocos preservando a ordem dos eixos (band, y, x).
+    
+    tile_corrections = [
+        {"target": (-58.90, -2.60, -58.80, -2.50), "ref": (-58.98, -2.60, -58.90, -2.50)},
+        {"target": (-58.80, -2.80, -58.70, -2.70), "ref": (-58.90, -2.80, -58.80, -2.70)},
+    ]
+    """
+    da_curr = da.transpose("band", "y", "x").copy(deep=True)
+
+    for corr in tile_corrections:
+        minx, miny, maxx, maxy = corr["target"]
+        rx0, ry0, rx1, ry1 = corr["ref"]
+
+        # Fatiamento seguro de coordenadas
+        y_slice_ref = slice(ry1, ry0) if da_curr.y[0] > da_curr.y[-1] else slice(ry0, ry1)
+        x_slice_ref = slice(rx0, rx1) if da_curr.x[0] < da_curr.x[-1] else slice(rx1, rx0)
+        
+        y_slice_tgt = slice(maxy, miny) if da_curr.y[0] > da_curr.y[-1] else slice(miny, maxy)
+        x_slice_tgt = slice(minx, maxx) if da_curr.x[0] < da_curr.x[-1] else slice(maxx, minx)
+
+        # Vetores médios de 128 dimensões
+        mean_ref = da_curr.sel(x=x_slice_ref, y=y_slice_ref).mean(dim=["x", "y"], skipna=True)
+        mean_tgt = da_curr.sel(x=x_slice_tgt, y=y_slice_tgt).mean(dim=["x", "y"], skipna=True)
+        delta = mean_ref - mean_tgt
+
+        # Máscara espacial no grid (y, x)
+        spatial_mask = (
+            (da_curr.x >= minx) & (da_curr.x <= maxx) &
+            (da_curr.y >= miny) & (da_curr.y <= maxy)
+        )
+
+        # Aplica o offset no bloco
+        da_curr = xr.where(spatial_mask, da_curr + delta, da_curr)
+
+    # Re-normalização L2 preservando a ordem dimensional
+    norms = np.sqrt((da_curr ** 2).sum(dim="band"))
+    norms = xr.where(norms == 0, 1.0, norms)
+    
+    da_aligned = (da_curr / norms).transpose("band", "y", "x")
+
+    # Metadados espaciais
+    da_aligned.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=True)
+    if da.rio.crs:
+        da_aligned.rio.write_crs(da.rio.crs, inplace=True)
+    if da.rio.transform():
+        da_aligned.rio.write_transform(da.rio.transform(), inplace=True)
+    da_aligned.rio.write_nodata(np.nan, inplace=True)
+
+    return da_aligned
+
+def validate_mosaic_pca(da):
+    fig, axes = plt.subplots(1, min(da.shape[0], 4), figsize=(16, 4))
+    for i, ax in enumerate(axes.ravel()):
+        da.isel(band=i).plot.imshow(ax=ax, cmap="gray", robust=True)
+        ax.set_title(f"Banda {i+1}")
+    plt.tight_layout()
+    plt.show()
+
+
+def compute_pca_rgb(
+    da: xr.DataArray, 
+    n_components: int = 3, 
+    p_min: float = 2.0, 
+    p_max: float = 98.0
+) -> xr.DataArray:
+    """Aplica PCA em um DataArray raster e retorna um novo DataArray georreferenciado
+
+    composto pelas componentes normalizadas em RGB [0.0, 1.0].
+    """
+    # 1. Garante que as dimensões estejam na ordem padronizada ("band", "y", "x")
+    da_std = da.transpose("band", "y", "x")
+    
+    n_bands = da_std.sizes["band"]
+    n_y = da_std.sizes["y"]
+    n_x = da_std.sizes["x"]
+    
+    # 2. Achata para (N_pixels, N_bands)
+    flat_data = da_std.values.transpose(1, 2, 0).reshape(-1, n_bands)
+
+    # 3. Identifica pixels válidos (ignora NaNs e vetores zerados)
+    valid_mask = ~np.isnan(flat_data).any(axis=1) & ~(flat_data == 0.0).all(axis=1)
+
+    if not np.any(valid_mask):
+        raise ValueError("O DataArray fornecido não contém dados válidos para ajuste do PCA.")
+
+    # 4. Ajuste e transformação do PCA
+    pca = PCA(n_components=n_components)
+    transformed = pca.fit_transform(flat_data[valid_mask])
+
+    # 5. Normalização Robusta por percentis
+    p_low, p_high = np.percentile(transformed, (p_min, p_max), axis=0)
+    diff = np.where((p_high - p_low) == 0, 1.0, (p_high - p_low))
+    transformed_scaled = np.clip((transformed - p_low) / diff, 0.0, 1.0)
+
+    # 6. Reconstrói a matriz preservando os NaNs nas bordas
+    pca_result = np.full((n_y * n_x, n_components), np.nan, dtype=np.float32)
+    pca_result[valid_mask] = transformed_scaled
+    pca_raster = pca_result.reshape(n_y, n_x, n_components).transpose(2, 0, 1)
+
+    # 7. Cria o novo DataArray georreferenciado
+    da_pca = xr.DataArray(
+        pca_raster,
+        dims=["band", "y", "x"],
+        coords={
+            "band": list(range(1, n_components + 1)),
+            "y": da_std.y,
+            "x": da_std.x,
+        },
+        attrs={
+            "description": f"PCA ({n_components} components) RGB Composite",
+            "pca_explained_variance_ratio": pca.explained_variance_ratio_.tolist(),
+        },
+    )
+
+    # 8. Herda metadados espaciais
+    da_pca.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=True)
+    if da_std.rio.crs is not None:
+        da_pca.rio.write_crs(da_std.rio.crs, inplace=True)
+    if da_std.rio.transform() is not None:
+        da_pca.rio.write_transform(da_std.rio.transform(), inplace=True)
+    da_pca.rio.write_nodata(np.nan, inplace=True)
+
+    return da_pca
+
 def extract_tessera_samples(
     tessera_mosaic: xr.DataArray,
     samples: gpd.GeoDataFrame,
@@ -158,6 +284,7 @@ def extract_tessera_samples(
     # Criação do GeoDataFrame de pontos
     df_embeddings = pd.DataFrame(emb_values, columns=column_names)
     df_embeddings["geometry"] = gdf.geometry.values
+    df_embeddings["tile"] = gdf["tile"]
     df_embeddings["label"] = gdf[label_column].values
     df_embeddings["year"] = year
 
@@ -209,7 +336,7 @@ def extract_tessera_samples(
 
   # 3. Formatação final em WKT e ordenação das colunas
   gdf_joined["geometry"] = gdf_joined.geometry.to_wkt()
-  final_cols = ["geometry", "label", "year"] + column_names
+  final_cols = ["geometry", "tile", "label", "year"] + column_names
 
   df_final = (
       pd.DataFrame(gdf_joined[final_cols])
@@ -219,57 +346,6 @@ def extract_tessera_samples(
 
   print(f"Total de amostras Tessera extraídas: {len(df_final)}")
   return df_final
-
-def compute_pca_rgb(da: xr.DataArray, n_components: int = 3, p_min: float = 2.0, p_max: float = 98.0) -> xr.DataArray:
-    """Aplica PCA em um DataArray raster e retorna um novo DataArray georreferenciado
-
-    composto pelas componentes normalizadas em RGB [0.0, 1.0].
-    """
-    n_bands, n_y, n_x = da.shape
-    flat_data = da.values.transpose(1, 2, 0).reshape(-1, n_bands)
-
-    # Identifica pixels validos (ignora NaNs e vetores zerados)
-    valid_mask = ~np.isnan(flat_data).any(axis=1) & ~(flat_data == 0.0).all(axis=1)
-
-    if not np.any(valid_mask):
-        raise ValueError("O DataArray fornecido nao contem dados validos para ajuste do PCA.")
-
-    # Ajuste e transformacao do PCA
-    pca = PCA(n_components=n_components)
-    transformed = pca.fit_transform(flat_data[valid_mask])
-
-    # Normalizacao Robusta por percentis
-    p_low, p_high = np.percentile(transformed, (p_min, p_max), axis=0)
-    diff = np.where((p_high - p_low) == 0, 1.0, (p_high - p_low))
-    transformed_scaled = np.clip((transformed - p_low) / diff, 0.0, 1.0)
-
-    # Reconstrói a matriz preservando os NaNs nas bordas
-    pca_result = np.full((n_y * n_x, n_components), np.nan, dtype=np.float32)
-    pca_result[valid_mask] = transformed_scaled
-    pca_raster = pca_result.reshape(n_y, n_x, n_components).transpose(2, 0, 1)
-
-    # Cria o novo DataArray georreferenciado
-    da_pca = xr.DataArray(
-        pca_raster,
-        dims=["band", "y", "x"],
-        coords={
-            "band": list(range(1, n_components + 1)),
-            "y": da.y,
-            "x": da.x,
-        },
-        attrs={
-            "description": f"PCA ({n_components} components) RGB Composite",
-            "pca_explained_variance_ratio": pca.explained_variance_ratio_.tolist(),
-        },
-    )
-
-    # Herda os metadados espaciais do DataArray original
-    da_pca.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=True)
-    da_pca.rio.write_crs(da.rio.crs, inplace=True)
-    da_pca.rio.write_transform(da.rio.transform(), inplace=True)
-    da_pca.rio.write_nodata(np.nan, inplace=True)
-
-    return da_pca
 
 def generatePlotFigPatterns(data, label, smoothing = False, window_length = 7, polyorder = 2):
     only_values = data
