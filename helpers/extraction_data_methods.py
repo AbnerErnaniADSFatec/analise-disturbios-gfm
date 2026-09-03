@@ -188,4 +188,28 @@ def encode_label(samples, label_):
 def one_hot(labels, num_classes):
     """Converte uma lista de índices inteiros em uma matriz/vetor one-hot."""
     return np.eye(num_classes)[labels]
+
+def plot_dist(train, val, test):
+    # Quantidade de amostras
+    train_size = len(train)
+    val_size = len(val)
+    test_size = len(test)
     
+    sizes = [train_size, val_size, test_size]
+    labels = [
+        f"Train ({train_size})",
+        f"Validation ({val_size})",
+        f"Test ({test_size})"
+    ]
+    plt.figure()
+    plt.pie(
+        sizes,
+        labels=labels,
+        autopct='%1.1f%%',
+        startangle=90
+    )
+    plt.title("Dataset Split Proportions")
+    plt.axis('equal')
+    plt.show()
+
+    return train_size, val_size, test_size
