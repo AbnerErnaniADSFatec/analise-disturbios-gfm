@@ -4,15 +4,15 @@
   <VRTRasterBand dataType="Int16" band="1">
     <Metadata>
       <MDI key="STATISTICS_APPROXIMATE">YES</MDI>
-      <MDI key="STATISTICS_MAXIMUM">2388</MDI>
-      <MDI key="STATISTICS_MEAN">256.55817906077</MDI>
-      <MDI key="STATISTICS_MINIMUM">77</MDI>
-      <MDI key="STATISTICS_STDDEV">156.57454806032</MDI>
+      <MDI key="STATISTICS_MAXIMUM">4187</MDI>
+      <MDI key="STATISTICS_MEAN">428.25295471185</MDI>
+      <MDI key="STATISTICS_MINIMUM">44</MDI>
+      <MDI key="STATISTICS_STDDEV">295.61287477364</MDI>
       <MDI key="STATISTICS_VALID_PERCENT">100</MDI>
     </Metadata>
     <NoDataValue>0</NoDataValue>
     <ComplexSource resampling="nearest">
-      <SourceFilename relativeToVRT="0">/vsicurl/https://data.inpe.br/bdc/data/s2-16d/v2/015/014/2024/05/24/S2-16D_V2_015014_20240524_B04.tif</SourceFilename>
+      <SourceFilename relativeToVRT="0">/vsicurl/https://data.inpe.br/bdc/data/s2-16d/v2/015/014/2024/07/27/S2-16D_V2_015014_20240727_B04.tif</SourceFilename>
       <SourceBand>1</SourceBand>
       <SourceProperties RasterXSize="10560" RasterYSize="10560" DataType="Int16" BlockXSize="512" BlockYSize="512" />
       <SrcRect xOff="0" yOff="0" xSize="10560" ySize="10560" />
@@ -23,15 +23,15 @@
   <VRTRasterBand dataType="Int16" band="2">
     <Metadata>
       <MDI key="STATISTICS_APPROXIMATE">YES</MDI>
-      <MDI key="STATISTICS_MAXIMUM">2533</MDI>
-      <MDI key="STATISTICS_MEAN">420.76788515846</MDI>
-      <MDI key="STATISTICS_MINIMUM">97</MDI>
-      <MDI key="STATISTICS_STDDEV">138.44358226763</MDI>
+      <MDI key="STATISTICS_MAXIMUM">3053</MDI>
+      <MDI key="STATISTICS_MEAN">613.89948750131</MDI>
+      <MDI key="STATISTICS_MINIMUM">161</MDI>
+      <MDI key="STATISTICS_STDDEV">243.83853840433</MDI>
       <MDI key="STATISTICS_VALID_PERCENT">100</MDI>
     </Metadata>
     <NoDataValue>0</NoDataValue>
     <ComplexSource resampling="nearest">
-      <SourceFilename relativeToVRT="0">/vsicurl/https://data.inpe.br/bdc/data/s2-16d/v2/015/014/2024/05/24/S2-16D_V2_015014_20240524_B03.tif</SourceFilename>
+      <SourceFilename relativeToVRT="0">/vsicurl/https://data.inpe.br/bdc/data/s2-16d/v2/015/014/2024/07/27/S2-16D_V2_015014_20240727_B03.tif</SourceFilename>
       <SourceBand>1</SourceBand>
       <SourceProperties RasterXSize="10560" RasterYSize="10560" DataType="Int16" BlockXSize="512" BlockYSize="512" />
       <SrcRect xOff="0" yOff="0" xSize="10560" ySize="10560" />
@@ -42,15 +42,15 @@
   <VRTRasterBand dataType="Int16" band="3">
     <Metadata>
       <MDI key="STATISTICS_APPROXIMATE">YES</MDI>
-      <MDI key="STATISTICS_MAXIMUM">2914</MDI>
-      <MDI key="STATISTICS_MEAN">281.31683401318</MDI>
-      <MDI key="STATISTICS_MINIMUM">80</MDI>
-      <MDI key="STATISTICS_STDDEV">114.86167562239</MDI>
+      <MDI key="STATISTICS_MAXIMUM">2560</MDI>
+      <MDI key="STATISTICS_MEAN">530.07326639472</MDI>
+      <MDI key="STATISTICS_MINIMUM">86</MDI>
+      <MDI key="STATISTICS_STDDEV">269.32276834398</MDI>
       <MDI key="STATISTICS_VALID_PERCENT">100</MDI>
     </Metadata>
     <NoDataValue>0</NoDataValue>
     <ComplexSource resampling="nearest">
-      <SourceFilename relativeToVRT="0">/vsicurl/https://data.inpe.br/bdc/data/s2-16d/v2/015/014/2024/05/24/S2-16D_V2_015014_20240524_B02.tif</SourceFilename>
+      <SourceFilename relativeToVRT="0">/vsicurl/https://data.inpe.br/bdc/data/s2-16d/v2/015/014/2024/07/27/S2-16D_V2_015014_20240727_B02.tif</SourceFilename>
       <SourceBand>1</SourceBand>
       <SourceProperties RasterXSize="10560" RasterYSize="10560" DataType="Int16" BlockXSize="512" BlockYSize="512" />
       <SrcRect xOff="0" yOff="0" xSize="10560" ySize="10560" />
