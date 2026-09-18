@@ -84,7 +84,7 @@ def extract_samples_from_tiff(da, mask, year, n_samples, tile = None):
     tile_id = "No tile"
     if tile is not None and not tile.empty:
         min_lon, min_lat, max_lon, max_lat = tile.total_bounds
-        subset = amazonia_class.rio.clip_box(
+        subset = da.rio.clip_box(
             minx=min_lon,
             miny=min_lat,
             maxx=max_lon,
