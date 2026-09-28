@@ -12,6 +12,7 @@ import geopandas as gpd
 from shapely.geometry import Point, MultiPolygon
 import xml.etree.ElementTree as ET
 import pandas as pd
+import re
 
 def count_values_tif(tiff):
     print("Cropped shape:", subset.shape)
@@ -20,7 +21,7 @@ def count_values_tif(tiff):
     for val, count in zip(unique_vals, counts):
         print(f"Value: {val:<6} | Pixels: {count}")
 
-def plot_balance(df, class_column, title = "Distribuição das Classes"):
+def plot_balance_(df, class_column, title = "Distribuição das Classes"):
     class_counts = df[class_column].value_counts()
     plt.figure(figsize=(8, 8))
     def make_autopct(values):
@@ -148,7 +149,7 @@ def plot_kde_pca(
     df_pca,
     col="PC1",
     hue_col="label",
-    palette=cores_classes,
+    palette={},
     show_legend=True,
     legend_title="Classes",
     figsize=(11, 5),
@@ -194,7 +195,7 @@ def plot_distribuicao_dados(
     tipo: str = "perfil",
     feature_prefix: str = "A",
     feature_col: str = None,
-    palette: dict | str = cores_classes,
+    palette: dict | str = {},
     show_legend: bool = True,
     legend_title: str = None,
     figsize: tuple = (12, 6),
