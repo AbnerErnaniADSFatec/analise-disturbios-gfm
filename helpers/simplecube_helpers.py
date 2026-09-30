@@ -380,6 +380,8 @@ def extract_sits_samples(
   return df_sits
 
 def plot_ts(data_df, selected_line, marker=True, smoothed=False, step=5):
+    data_df["longitude"] = data_df["longitude"].astype(float)
+    data_df["latitude"] = data_df["latitude"].astype(float)
     item = data_df['time_series'][selected_line]
     ts = item if isinstance(data_df, dict) else eval(item)
     ts = pd.DataFrame(ts)
