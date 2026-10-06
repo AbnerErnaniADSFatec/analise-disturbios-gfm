@@ -17,6 +17,72 @@ from sklearn.decomposition import PCA
 import xarray as xr
 
 
+def compute_pca_rgb(
+    da: xr.DataArray, 
+    n_components: int = 3, 
+    p_min: float = 2.0, 
+    p_max: float = 98.0
+) -> xr.DataArray:
+    """Aplica PCA em um DataArray raster e retorna um novo DataArray georreferenciado
+
+    composto pelas componentes normalizadas em RGB [0.0, 1.0].
+    """
+    # 1. Garante que as dimensões estejam na ordem padronizada ("band", "y", "x")
+    da_std = da.transpose("band", "y", "x")
+    
+    n_bands = da_std.sizes["band"]
+    n_y = da_std.sizes["y"]
+    n_x = da_std.sizes["x"]
+    
+    # 2. Achata para (N_pixels, N_bands)
+    flat_data = da_std.values.transpose(1, 2, 0).reshape(-1, n_bands)
+
+    # 3. Identifica pixels válidos (ignora NaNs e vetores zerados)
+    valid_mask = ~np.isnan(flat_data).any(axis=1) & ~(flat_data == 0.0).all(axis=1)
+
+    if not np.any(valid_mask):
+        raise ValueError("O DataArray fornecido não contém dados válidos para ajuste do PCA.")
+
+    # 4. Ajuste e transformação do PCA
+    pca = PCA(n_components=n_components)
+    transformed = pca.fit_transform(flat_data[valid_mask])
+
+    # 5. Normalização Robusta por percentis
+    p_low, p_high = np.percentile(transformed, (p_min, p_max), axis=0)
+    diff = np.where((p_high - p_low) == 0, 1.0, (p_high - p_low))
+    transformed_scaled = np.clip((transformed - p_low) / diff, 0.0, 1.0)
+
+    # 6. Reconstrói a matriz preservando os NaNs nas bordas
+    pca_result = np.full((n_y * n_x, n_components), np.nan, dtype=np.float32)
+    pca_result[valid_mask] = transformed_scaled
+    pca_raster = pca_result.reshape(n_y, n_x, n_components).transpose(2, 0, 1)
+
+    # 7. Cria o novo DataArray georreferenciado
+    da_pca = xr.DataArray(
+        pca_raster,
+        dims=["band", "y", "x"],
+        coords={
+            "band": list(range(1, n_components + 1)),
+            "y": da_std.y,
+            "x": da_std.x,
+        },
+        attrs={
+            "description": f"PCA ({n_components} components) RGB Composite",
+            "pca_explained_variance_ratio": pca.explained_variance_ratio_.tolist(),
+        },
+    )
+
+    # 8. Herda metadados espaciais
+    da_pca.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=True)
+    if da_std.rio.crs is not None:
+        da_pca.rio.write_crs(da_std.rio.crs, inplace=True)
+    if da_std.rio.transform() is not None:
+        da_pca.rio.write_transform(da_std.rio.transform(), inplace=True)
+    da_pca.rio.write_nodata(np.nan, inplace=True)
+
+    return da_pca
+
+
 def calculate_pca_rgb(image, roi, scale=10, crs_str=None, use_percentiles=True):
     band_names = image.bandNames()
     
