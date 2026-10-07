@@ -49,7 +49,16 @@ pip install git+https://github.com/cybergis/rs-embed
 
 #### Raster path with downloaded data
 
-(https://drive.google.com/drive/folders/14b_a2CKy_UOXCB3XebwXwvMpVxpOL7uw?usp=sharing)[https://drive.google.com/drive/folders/14b_a2CKy_UOXCB3XebwXwvMpVxpOL7uw?usp=sharing]
+```
+/rasters/aux$ ls -al
+total 660617
+drwxrwsr-x 3 jovyan users         4 Sep 29 19:30 .
+drwxrwsr-x 7 jovyan users         5 Oct  7 14:14 ..
+drwxrwsr-x 2 jovyan users         1 Sep 29 19:30 .ipynb_checkpoints
+-rw-rw-r-- 1 jovyan users      3360 Sep  1 14:13 amazonia_class.qml
+-rw-rw---- 1 jovyan users 676466987 Sep  1 13:47 amazonia_class.tif
+-rw-rw-r-- 1 jovyan users       409 Sep  1 14:28 amazonia_class.tif.aux.xml
+```
 
 ```
 mkdir ./datasets/rasters
