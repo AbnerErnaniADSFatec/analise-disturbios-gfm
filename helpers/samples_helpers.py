@@ -1,34 +1,24 @@
-import folium
-import gdown
-import geopandas as gpd
-import matplotlib.pyplot as plt
-import pandas as pd
-from folium.plugins import Fullscreen
-from helpers.samples_helpers import *
-from helpers.simplecube_helpers import *
-import numpy as np
-import pandas as pd
-import geopandas as gpd
-from shapely.geometry import Point, MultiPolygon
-import xml.etree.ElementTree as ET
-import pandas as pd
-import re
 import json
 import random
 import re
+import xml.etree.ElementTree as ET
 
+import folium
+import gdown
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import shapely
+from folium.plugins import Fullscreen
 from helpers.comparison_helpers import *
-from helpers.simplecube_helpers import *
 from helpers.samples_helpers import *
+from helpers.simplecube_helpers import *
 from matplotlib.colors import LinearSegmentedColormap
 from scipy.spatial import cKDTree
 from shapely import wkt
+from shapely.geometry import MultiPolygon, Point
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
@@ -40,9 +30,9 @@ def count_values_tif(tiff):
     for val, count in zip(unique_vals, counts):
         print(f"Value: {val:<6} | Pixels: {count}")
 
-def plot_balance_(df, class_column, title = "Distribuição das Classes"):
+def plot_balance_(df, class_column, title = "Distribuição das Classes", figsize = (8, 8)):
     class_counts = df[class_column].value_counts()
-    plt.figure(figsize=(8, 8))
+    plt.figure(figsize=figsize)
     def make_autopct(values):
         def my_autopct(pct):
             total = sum(values)
@@ -58,6 +48,42 @@ def plot_balance_(df, class_column, title = "Distribuição das Classes"):
         wedgeprops={'edgecolor': 'white', 'linewidth': 1.5}
     )
     plt.title(title, fontsize=14, pad=20)
+    plt.tight_layout()
+    plt.show()
+
+def plot_balance_bar(df, class_column, title="Distribuição das Classes", figsize=(8, 5)):
+    
+    class_counts = df[class_column].value_counts().sort_index()
+    total = class_counts.sum()
+    
+    colors = plt.cm.Set2.colors[:len(class_counts)]
+    
+    fig, ax = plt.subplots(figsize=figsize)
+    bars = ax.bar(class_counts.index.astype(str), class_counts.values, color=colors, edgecolor='none')
+    
+    for bar in bars:
+        height = bar.get_height()
+        pct = (height / total) * 100
+        ax.annotate(
+            f'{pct:.1f}%\n({int(height):,})',
+            xy=(bar.get_x() + bar.get_width() / 2, height),
+            xytext=(0, 4),  # Deslocamento vertical de 4 pontos
+            textcoords="offset points",
+            ha='center', va='bottom',
+            fontsize=10
+        )
+    
+    ax.set_title(title, fontsize=14, pad=15)
+    ax.set_xlabel(class_column, fontsize=11, labelpad=10)
+    ax.set_ylabel("Contagem", fontsize=11)
+    
+    ax.set_ylim(0, class_counts.max() * 1.18)
+    
+    # Remove bordas desnecessárias (estilo clean)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.grid(axis='y', linestyle='--', alpha=0.5)
+    
     plt.tight_layout()
     plt.show()
 
@@ -98,6 +124,73 @@ def extract_qml_legend(qml_path):
     mapping_dict = {row["value"]: row["label"] for row in legend_entries}
     
     return mapping_dict, df_legend
+
+def sample_points_in_polygons(gdf, n_points_per_polygon=1, top_n=1, class_column="label", negative_buffer=0):
+
+    # Trabalhar em CRS métrico
+    original_crs = gdf.crs
+
+    if original_crs is None:
+        raise ValueError("O GeoDataFrame precisa ter um CRS definido.")
+
+    # UTM 20S para a região do dataset
+    gdf = gdf.to_crs("EPSG:32720")
+
+    points = []
+    class_ = []
+
+    for _, row in gdf.iterrows():
+        geom = row.geometry
+
+        if isinstance(geom, MultiPolygon):
+            polygons = sorted(
+                geom.geoms,
+                key=lambda p: p.area,
+                reverse=True
+            )[:top_n]
+        else:
+            polygons = [geom]
+
+        for poly in polygons:
+
+            # Buffer negativo em METROS
+            if negative_buffer > 0:
+                poly = poly.buffer(-negative_buffer)
+
+            if poly.is_empty:
+                continue
+
+            minx, miny, maxx, maxy = poly.bounds
+
+            count = 0
+            attempts = 0
+            max_attempts = n_points_per_polygon * 1000
+
+            while count < n_points_per_polygon and attempts < max_attempts:
+
+                x = np.random.uniform(minx, maxx)
+                y = np.random.uniform(miny, maxy)
+
+                p = Point(x, y)
+
+                attempts += 1
+
+                if poly.contains(p):
+                    points.append(p)
+                    class_.append(row[class_column])
+                    count += 1
+
+    result = gpd.GeoDataFrame(
+        {class_column: class_},
+        geometry=points,
+        crs=gdf.crs
+    )
+
+    # Volta para o CRS original
+    if original_crs is not None:
+        result = result.to_crs(original_crs)
+
+    return result
 
 def extract_samples_from_tiff(da, mask, year, n_samples, tile = None):
     subset = da

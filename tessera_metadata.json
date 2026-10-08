@@ -1,0 +1,10 @@
+{
+  "dataset_path": "v1.1-cam",
+  "dataset_variant": "cambridge",
+  "dataset_version": "1.1",
+  "dataset_version_path": "v1.1",
+  "embeddings_subdir": "global_0.1_degree_representation",
+  "generated_at": "2026-10-08T18:42:38.860053+00:00",
+  "s3_embeddings_subdir": "global_0.1_degree_representation.cambridge",
+  "source_url_prefix": "https://data.source.coop/tessera/tessera/npy/v1.1-cam/"
+}

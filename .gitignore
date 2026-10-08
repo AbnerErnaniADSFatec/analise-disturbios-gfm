@@ -221,4 +221,6 @@ __marimo__/
 dataset/rasters
 
 # Tessera Cache
+tessera_cache/
 global_*/
+tessera_metadata.json

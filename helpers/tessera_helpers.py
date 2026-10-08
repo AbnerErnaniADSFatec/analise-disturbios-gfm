@@ -5,7 +5,6 @@ from pathlib import Path
 
 import ee
 import folium
-import geemap.foliumap as geemap
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -24,6 +23,11 @@ from shapely.geometry import Point
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import MinMaxScaler, RobustScaler, normalize
 
+WGS84_WKT = (
+    'GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],'
+    'PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],'
+    'AUTHORITY["EPSG","4326"]]'
+)
 
 def create_tessera_mosaic(gt_object, year: int, bbox: list[float]) -> xr.DataArray:
   """Monta o mosaico Tessera a partir dos arquivos salvos localmente,

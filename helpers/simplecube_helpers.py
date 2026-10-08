@@ -3,7 +3,6 @@ import os
 import urllib
 
 import folium
-import geemap.foliumap as geemap
 import geopandas as gpd
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -92,42 +91,6 @@ def make_request_wtss(coverage, bands, start, end, longitude, latitude):
         return(json.dumps(ts_))
     else:
         return(json.dumps({}, ensure_ascii=False))
-
-def sample_points_in_polygons(gdf, n_points_per_polygon = 1, top_n = 1, class_column = "label"):
-    points = []
-    class_ = []
-
-    for _, row in gdf.iterrows():
-        geom = row.geometry
-
-        # se for multipolygon, ele identifica os top_n maiores
-        if isinstance(geom, MultiPolygon):
-            polygons = list(geom.geoms)
-
-            # ordenar por área (maior → menor)
-            polygons = sorted(polygons, key=lambda p: p.area, reverse=True)
-
-            # pegar os top N maiores
-            polygons = polygons[:top_n]
-        else:
-            polygons = [geom]
-
-        # Amostrar aleatóriamente em cada polígono selecionado
-        for poly in polygons:
-            minx, miny, maxx, maxy = poly.bounds
-            count = 0
-
-            while count < n_points_per_polygon:
-                x = np.random.uniform(minx, maxx)
-                y = np.random.uniform(miny, maxy)
-                p = Point(x, y)
-
-                if poly.contains(p):
-                    points.append(p)
-                    class_.append(row[class_column])
-                    count += 1
-
-    return gpd.GeoDataFrame({'label': class_}, geometry=points, crs=gdf.crs)
 
 def plot_xarray_(
     data,
