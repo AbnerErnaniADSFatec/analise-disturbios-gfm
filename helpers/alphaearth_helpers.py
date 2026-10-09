@@ -1,7 +1,7 @@
 import ee
 import time
 import json
-import geemap.foliumap as geemap
+# import geemap.foliumap as geemap
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import pandas as pd
