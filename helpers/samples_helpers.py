@@ -125,6 +125,42 @@ def extract_qml_legend(qml_path):
     
     return mapping_dict, df_legend
 
+def balance_samples(df, class_column="label", n_samples=1000, random_state=42):
+    # Remove ou ignora valores explicitamente nulos na coluna alvo, se existirem
+    valid_df = df.dropna(subset=[class_column]).copy()
+    
+    counts = valid_df[class_column].value_counts()
+    
+    classes_to_sample = counts[counts >= n_samples].index.tolist()
+    classes_to_keep = counts[counts < n_samples].index.tolist()
+    
+    if not classes_to_sample:
+        raise ValueError(
+            f"Erro: Nenhuma classe possui pelo menos {n_samples} amostras. "
+            f"Contagem disponível por classe:\n{counts.to_string()}"
+        )
+    
+    # Informa classes que ficaram abaixo do limiar
+    for cls in classes_to_keep:
+        print(f"[Aviso] Classe '{cls}' possui apenas {counts[cls]} amostras (< {n_samples}). Mantendo todas.")
+    
+    sampled_dfs = []
+    
+    # 1. Sorteia n_samples para as classes elegíveis
+    for cls in classes_to_sample:
+        subset = valid_df[valid_df[class_column] == cls]
+        sampled_dfs.append(subset.sample(n=n_samples, random_state=random_state))
+        
+    # 2. Mantém todas as amostras das classes menores
+    for cls in classes_to_keep:
+        subset = valid_df[valid_df[class_column] == cls]
+        sampled_dfs.append(subset)
+        
+    # Concatena preservando tipo (GeoDataFrame/DataFrame) e colunas
+    result_df = pd.concat(sampled_dfs, ignore_index=True)
+    
+    return result_df
+
 def sample_points_in_polygons(gdf, n_points_per_polygon=1, top_n=1, class_column="label", negative_buffer=0):
 
     # Trabalhar em CRS métrico
