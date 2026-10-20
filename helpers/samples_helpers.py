@@ -161,6 +161,48 @@ def balance_samples(df, class_column="label", n_samples=1000, random_state=42):
     
     return result_df
 
+def dissolver_por_classe(
+    gdf: gpd.GeoDataFrame, 
+    coluna_classe: str = 'classe', 
+    aggfunc: str | dict = 'first'
+) -> gpd.GeoDataFrame:
+    """
+    Dissolve polígonos de um GeoDataFrame com base em uma coluna de classe.
+
+    Parâmetros:
+    -----------
+    gdf : gpd.GeoDataFrame
+        GeoDataFrame de entrada contendo as geometrias e atributos.
+    coluna_classe : str, default 'classe'
+        Nome da coluna utilizada para agrupar e dissolver as geometrias.
+    aggfunc : str ou dict, default 'first'
+        Função de agregação para as outras colunas (ex: 'sum', 'mean', 'first' 
+        ou um dicionário {'area': 'sum', 'nome': 'first'}).
+
+    Retorna:
+    --------
+    gpd.GeoDataFrame
+        Novo GeoDataFrame dissolvido com índice resetado.
+    """
+    if coluna_classe not in gdf.columns:
+        raise ValueError(f"A coluna '{coluna_classe}' não existe no GeoDataFrame.")
+
+    # 1. Garante uma cópia para evitar warnings/mutações indesejadas
+    gdf_proc = gdf.copy()
+
+    # 2. Corrige geometrias inválidas comuns antes de operações topológicas
+    if not gdf_proc.is_valid.all():
+        gdf_proc['geometry'] = gdf_proc.make_valid()
+
+    # 3. Executa a dissolução
+    gdf_dissolvido = gdf_proc.dissolve(
+        by=coluna_classe, 
+        aggfunc=aggfunc, 
+        as_index=False
+    )
+
+    return gdf_dissolvido
+
 def sample_points_in_polygons(gdf, n_points_per_polygon=1, top_n=1, class_column="label", negative_buffer=0):
 
     # Trabalhar em CRS métrico
