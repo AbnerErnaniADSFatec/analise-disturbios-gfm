@@ -12,16 +12,20 @@ import pandas as pd
 import seaborn as sns
 import shapely
 from folium.plugins import Fullscreen
-from helpers.comparison_helpers import *
-from helpers.samples_helpers import *
-from helpers.simplecube_helpers import *
 from matplotlib.colors import LinearSegmentedColormap
+from rasterio.features import geometry_mask
 from scipy.spatial import cKDTree
 from shapely import wkt
 from shapely.geometry import MultiPolygon, Point
+from shapely.ops import unary_union
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
+
+from helpers.comparison_helpers import *
+from helpers.samples_helpers import *
+from helpers.simplecube_helpers import *
+
 
 def count_values_tif(tiff):
     print("Cropped shape:", subset.shape)
@@ -203,16 +207,35 @@ def dissolver_por_classe(
 
     return gdf_dissolvido
 
-def sample_points_in_polygons(gdf, n_points_per_polygon=1, top_n=1, class_column="label", negative_buffer=0):
-
-    # Trabalhar em CRS métrico
+def sample_points_in_polygons(
+    gdf, 
+    n_points_per_polygon=1, 
+    top_n=1, 
+    class_column="label", 
+    negative_buffer=0,
+    max_eroded_ratio=0.5,
+    exclude_gdf=None,
+    exclude_buffer=0.0,
+    min_distance=0.0  # Distância mínima em METROS entre pontos do mesmo polígono
+):
     original_crs = gdf.crs
 
     if original_crs is None:
         raise ValueError("O GeoDataFrame precisa ter um CRS definido.")
 
-    # UTM 20S para a região do dataset
-    gdf = gdf.to_crs("EPSG:32720")
+    target_metric_crs = "EPSG:32720"
+    gdf = gdf.to_crs(target_metric_crs)
+
+    # 1. Preparar a geometria unificada de exclusão (se fornecida)
+    exclusion_geom = None
+    if exclude_gdf is not None and not exclude_gdf.empty:
+        exclude_metric = exclude_gdf.to_crs(target_metric_crs)
+        geoms_to_exclude = exclude_metric.geometry
+        
+        if exclude_buffer > 0:
+            geoms_to_exclude = geoms_to_exclude.buffer(exclude_buffer)
+            
+        exclusion_geom = unary_union(geoms_to_exclude)
 
     points = []
     class_ = []
@@ -230,33 +253,55 @@ def sample_points_in_polygons(gdf, n_points_per_polygon=1, top_n=1, class_column
             polygons = [geom]
 
         for poly in polygons:
+            original_area = poly.area
 
-            # Buffer negativo em METROS
+            # 2. Buffer negativo
+            buffered_poly = poly
             if negative_buffer > 0:
-                poly = poly.buffer(-negative_buffer)
+                buffered_poly = poly.buffer(-negative_buffer)
 
-            if poly.is_empty:
+            if buffered_poly.is_empty:
                 continue
 
-            minx, miny, maxx, maxy = poly.bounds
+            # 3. Subtração de geometrias a evitar
+            if exclusion_geom is not None and not exclusion_geom.is_empty:
+                buffered_poly = buffered_poly.difference(exclusion_geom)
 
-            count = 0
+            if buffered_poly.is_empty:
+                continue
+
+            # 4. Regra de área erodida
+            area_restante = buffered_poly.area
+            razao_erodida = (original_area - area_restante) / original_area
+
+            if razao_erodida > max_eroded_ratio:
+                continue
+
+            # 5. Sorteio com controle de dispersão espacial (Poisson Disk / Inibição)
+            minx, miny, maxx, maxy = buffered_poly.bounds
+
+            poly_points = []
             attempts = 0
-            max_attempts = n_points_per_polygon * 1000
+            max_attempts = n_points_per_polygon * 2000
 
-            while count < n_points_per_polygon and attempts < max_attempts:
-
+            while len(poly_points) < n_points_per_polygon and attempts < max_attempts:
+                attempts += 1
+                
                 x = np.random.uniform(minx, maxx)
                 y = np.random.uniform(miny, maxy)
-
                 p = Point(x, y)
 
-                attempts += 1
+                if buffered_poly.contains(p):
+                    # Se houver restrição de distância mínima, verifica proximidade
+                    if min_distance > 0.0 and len(poly_points) > 0:
+                        # Checa se está próximo demais de algum ponto já aceito neste polígono
+                        too_close = any(p.distance(existing_p) < min_distance for existing_p in poly_points)
+                        if too_close:
+                            continue
 
-                if poly.contains(p):
+                    poly_points.append(p)
                     points.append(p)
                     class_.append(row[class_column])
-                    count += 1
 
     result = gpd.GeoDataFrame(
         {class_column: class_},
@@ -264,15 +309,25 @@ def sample_points_in_polygons(gdf, n_points_per_polygon=1, top_n=1, class_column
         crs=gdf.crs
     )
 
-    # Volta para o CRS original
+    # Retorna ao CRS original
     if original_crs is not None:
         result = result.to_crs(original_crs)
 
     return result
 
-def extract_samples_from_tiff(da, mask, year, n_samples, tile = None):
+def extract_samples_from_tiff(
+    da, 
+    mask, 
+    year, 
+    n_samples, 
+    tile=None, 
+    exclude_gdf=None, 
+    exclude_buffer=0.0
+):
     subset = da
     tile_id = "No tile"
+    
+    # 1. Recorte pelo tile se fornecido
     if tile is not None and not tile.empty:
         min_lon, min_lat, max_lon, max_lat = tile.total_bounds
         subset = da.rio.clip_box(
@@ -282,30 +337,67 @@ def extract_samples_from_tiff(da, mask, year, n_samples, tile = None):
             maxy=max_lat
         ).squeeze().compute()    
         tile_id = tile.iloc[0].id        
-    
+    else:
+        subset = subset.squeeze().compute()
+
     TARGET_CLASSES = mask
-    SAMPLES_PER_CLASS = n_samples  # Number of points per class
+    SAMPLES_PER_CLASS = n_samples
     records = []
     
-    # Get 1D coordinate arrays
+    # 2. Obter coordenadas e matriz de valores
     x_coords = subset.x.values
     y_coords = subset.y.values
     raster_values = subset.values
-    
+
+    # 3. Construir máscara de exclusão, se fornecida
+    # valid_mask: True onde o pixel pode ser amostrado, False onde deve ser evitado
+    valid_mask = np.ones(raster_values.shape, dtype=bool)
+
+    if exclude_gdf is not None and not exclude_gdf.empty:
+        raster_crs = da.rio.crs if da.rio.crs else "EPSG:4326"
+        
+        # Garante alinhamento inicial com o CRS do raster
+        if exclude_gdf.crs != raster_crs:
+            exclude_gdf = exclude_gdf.to_crs(raster_crs)
+
+        geoms_to_exclude = exclude_gdf.geometry
+
+        # Aplicar buffer considerando a unidade correta
+        if exclude_buffer > 0.0:
+            # Se for geográfico (graus), projeta para UTM em metros antes do buffer
+            if exclude_gdf.crs and exclude_gdf.crs.is_geographic:
+                utm_crs = exclude_gdf.estimate_utm_crs()
+                geoms_to_exclude = (
+                    geoms_to_exclude.to_crs(utm_crs)
+                    .buffer(exclude_buffer)
+                    .to_crs(raster_crs)
+                )
+            else:
+                # Já está em CRS projetado (metros/pés)
+                geoms_to_exclude = geoms_to_exclude.buffer(exclude_buffer)
+
+        if not geoms_to_exclude.is_empty.all():
+            is_inside_exclusion = geometry_mask(
+                geometries=geoms_to_exclude,
+                out_shape=raster_values.shape,
+                transform=subset.rio.transform(),
+                invert=True
+            )
+            valid_mask = ~is_inside_exclusion
+
+    # 4. Amostragem estratificada
     for class_id, class_name in TARGET_CLASSES.items():
-        # Find row (y) and column (x) indices matching the class
-        row_idx, col_idx = np.where(raster_values == class_id)
+        # Encontra pixels que pertencem à classe E não estão na área de exclusão
+        row_idx, col_idx = np.where((raster_values == class_id) & valid_mask)
         
         total_pixels = len(row_idx)
         if total_pixels == 0:
-            print(f"Class {class_name} ({class_id}) not found in this tile.")
+            print(f"Class {class_name} ({class_id}) not found (or completely excluded) in this tile.")
             continue
         
-        # Sample with or without replacement based on class abundance
         sample_size = min(SAMPLES_PER_CLASS, total_pixels)
         selected_indices = np.random.choice(total_pixels, size=sample_size, replace=False)
         
-        # Map pixel indices to geospatial coordinates
         sampled_xs = x_coords[col_idx[selected_indices]]
         sampled_ys = y_coords[row_idx[selected_indices]]
         
@@ -317,22 +409,23 @@ def extract_samples_from_tiff(da, mask, year, n_samples, tile = None):
                 "geometry": Point(x, y)
             })
     
-    # Create GeoDataFrame
+    # 5. Criação do GeoDataFrame final
+    raster_crs = da.rio.crs if da.rio.crs else "EPSG:4326"
     if len(records) > 0:
         df = pd.DataFrame(records)
         samples_gdf = gpd.GeoDataFrame(
             df, 
             geometry="geometry", 
-            crs=da.rio.crs if da.rio.crs else "EPSG:4326"
+            crs=raster_crs
         )
     else:
-        # Create an empty GeoDataFrame with predefined schema if no points were sampled
         samples_gdf = gpd.GeoDataFrame(
             columns=["year", "label", "tile", "geometry"],
             geometry="geometry",
-            crs=da.rio.crs if da.rio.crs else "EPSG:4326"
+            crs=raster_crs
         )
         print("Warning: No matching sample points were found. Resulting GeoDataFrame is empty.")
+        
     return samples_gdf
 
 def plot_kde_pca(
