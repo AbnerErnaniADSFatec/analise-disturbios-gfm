@@ -339,11 +339,12 @@ def extract_tessera_samples(
     gdf_joined["year"] = year
 
   # 3. Formatação final em WKT e ordenação das colunas
-  gdf_joined["geometry"] = gdf_joined.geometry.to_wkt()
+  df_joined = pd.DataFrame(gdf_joined)
+  df_joined["geometry"] = gdf_joined.geometry.to_wkt()
+  
   final_cols = ["geometry", "tile", "label", "year"] + column_names
-
   df_final = (
-      pd.DataFrame(gdf_joined[final_cols])
+      df_joined[final_cols]
       .drop_duplicates(subset=["geometry"])
       .reset_index(drop=True)
   )
