@@ -16,6 +16,8 @@ pip install fsspec s3fs aiohttp zarr numpy==1.26.4 scipy==1.15.3 pandas==2.2.3 p
 python3 -m pip install -r requirements.txt
 
 ipython kernel install --user --name acrp
+
+pip install umap-learn plotly
 ```
 
 #### AlphaEarth

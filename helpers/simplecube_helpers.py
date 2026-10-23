@@ -458,13 +458,12 @@ def plot_patterns(samples, band, step=3):
         plt.show()
 
 def extract_bands_ts(samples, line, bands_to_select):
-    # Se for string converte, se já for dicionário usa direto
-    item = samples['time_series'][line]
+    # Use .iloc to access by position, preventing KeyError on filtered DataFrames
+    item = samples['time_series'].iloc[line]
     sample_dict = item if isinstance(item, dict) else eval(item)
     ts_ = pd.DataFrame(sample_dict)
     bands_ = ["Index"] + bands_to_select
-    ts_ = ts_[bands_]
-    return ts_
+    return ts_[bands_]
 
 def extract_bands(samples, bands):
     samples_ = samples.copy()

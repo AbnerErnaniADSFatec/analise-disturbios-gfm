@@ -815,4 +815,273 @@ def plot_pca_cumulative_variance(gdf: gpd.GeoDataFrame, title: str = "PCA Análi
 
     plt.tight_layout()
     plt.show()
+
+def plot_embedding_distribution(
+    data,
+    source="alphaearth",      # 'alphaearth' ou 'tessera'
+    label_col="label",
+    title="Distribuição",      # Título base para os subplots (ex: "Distribuição - 2022")
+    cores_classes=None,
+    selected_dims=None,
+    years=None,               # Opcional: lista de anos específicos para filtrar
+    figsize=(14, 9),
+    alpha=0.45
+):
+    """
+    Gera violin plots sobrepostos por ano mostrando a distribuição dos embeddings por classe.
+
+    Parâmetros:
+    -----------
+    data : pd.DataFrame ou gpd.GeoDataFrame
+        DataFrame contendo as colunas de dimensões, 'year' e a coluna de rótulo.
+    source : str
+        Fonte dos dados: 'alphaearth' ou 'tessera'.
+    label_col : str
+        Nome da coluna de rótulo (ex: 'label' ou 'label_').
+    title : str, opcional
+        Título base a ser exibido antes do ano em cada painel (formato: "Título - Ano").
+    cores_classes : dict, opcional
+        Dicionário {classe: cor_hex}.
+    selected_dims : list, opcional
+        Lista de dimensões a exibir. Se None, seleciona dimensões padrão representativas.
+    years : list, opcional
+        Lista com os anos a filtrar. Se None, utiliza todos os anos presentes em 'data'.
+    figsize : tuple, opcional
+        Dimensões (largura, altura) da figura.
+    alpha : float, opcional
+        Transparência para a sobreposição dos violinos.
+    """
+    source_key = source.lower().strip()
+    if source_key not in ["alphaearth", "tessera"]:
+        raise ValueError("O parâmetro 'source' deve ser 'alphaearth' ou 'tessera'.")
+
+    prefix = "A" if source_key == "alphaearth" else "T"
+
+    # 1. Dimensões padrão se não informadas
+    if selected_dims is None:
+        if source_key == "alphaearth":
+            selected_dims = [
+                'A01', 'A02', 'A06', 'A22', 'A25', 'A30', 
+                'A36', 'A38', 'A43', 'A50', 'A53', 'A63'
+            ]
+        else:
+            selected_dims = [
+                'T0', 'T10', 'T20', 'T30', 'T40', 'T50', 
+                'T60', 'T70', 'T80', 'T90', 'T100', 'T110', 'T120'
+            ]
+
+    # 2. Validação e preparação dos dados
+    df = data.copy()
+
+    if "year" not in df.columns:
+        raise KeyError("O DataFrame fornecido deve conter uma coluna chamada 'year'.")
+
+    if label_col not in df.columns:
+        raise KeyError(f"A coluna de rótulo '{label_col}' não foi encontrada no DataFrame.")
+
+    # Filtro opcional de anos informado pelo usuário
+    if years is not None:
+        anos_normalizados = [int(y) for y in years]
+        df["year"] = pd.to_numeric(df["year"], errors="coerce")
+        df = df[df["year"].isin(anos_normalizados)]
+
+    # Filtro de classes se um dicionário de cores for especificado
+    if cores_classes is not None:
+        df = df[df[label_col].isin(cores_classes.keys())]
+
+    # Identificação das dimensões presentes
+    dims_validas = [col for col in selected_dims if col in df.columns]
+    if not dims_validas:
+        dims_validas = [c for c in df.columns if c.startswith(prefix) and c[len(prefix):].isdigit()]
+
+    if df.empty or not dims_validas:
+        raise ValueError("Nenhum registro ou dimensão válida encontrada para gerar a visualização.")
+
+    # 3. Transformação em formato longo (melt)
+    df_plot = df.melt(
+        id_vars=["year", label_col],
+        value_vars=dims_validas,
+        var_name="dimensions",
+        value_name="values"
+    )
+    df_plot["values"] = pd.to_numeric(df_plot["values"], errors="coerce")
+    df_plot = df_plot.dropna(subset=["values", "year"])
+    df_plot["year"] = df_plot["year"].astype(int)
+
+    # 4. Construção do Grid Seaborn
+    sns.set_theme(style="whitegrid", rc={"grid.color": "#ebebeb"})
+
+    num_anos = df_plot["year"].nunique()
+    height_row = figsize[1] / max(1, num_anos)
+    aspect_ratio = figsize[0] / height_row
+
+    g = sns.FacetGrid(
+        df_plot,
+        row="year",
+        height=height_row,
+        aspect=aspect_ratio,
+        sharey=True,
+        sharex=True
+    )
+
+    # 5. Curvas de densidade sobrepostas (apenas a distribuição)
+    g.map_dataframe(
+        sns.violinplot,
+        x="dimensions",
+        y="values",
+        hue=label_col,
+        palette=cores_classes,
+        dodge=False,
+        inner=None,
+        cut=0,
+        density_norm="width",
+        linewidth=1.2,
+        alpha=alpha
+    )
+
+    # 6. Ajustes cosméticos e títulos com "Título - Ano"
+    display_name = "AlphaEarth" if source_key == "alphaearth" else "Tessera"
+    g.set_axis_labels("dimensions", f"values ({display_name})", fontsize=11)
+
+    template_titulo = f"{title} - {{row_name}}" if title else "{row_name}"
+    g.set_titles(row_template=template_titulo, size=14, weight="bold")
+
+    for ax in g.axes.flat:
+        ax.tick_params(labelbottom=True, labelsize=9)
+
+    g.fig.subplots_adjust(top=0.92, bottom=0.10, hspace=0.25, right=0.83)
+
+    # 7. Legenda lateral
+    handles, labels = g.axes[0, 0].get_legend_handles_labels()
+    n_classes = len(cores_classes) if cores_classes else len(set(labels))
+    g.fig.legend(
+        handles=handles[:n_classes],
+        labels=labels[:n_classes],
+        title="Cover",
+        loc="center left",
+        bbox_to_anchor=(0.84, 0.5),
+        frameon=False,
+        fontsize=9,
+        title_fontsize=10
+    )
+
+    return g
+
+def calcular_tsne(
+    df: pd.DataFrame,
+    embedding_type: str = "alphaearth",
+    n_components: int = 2,
+    perplexity: float = 30.0,
+    random_state: int = 42,
+) -> tuple[pd.DataFrame, TSNE]:
+    """Calcula a redução dimensional via t-SNE para AlphaEarth ou Tessera."""
+    df_proc = df.copy().reset_index(drop=True)
+    emb_key = embedding_type.lower()
+
+    if emb_key == "alphaearth":
+        cols = [f"A{i:02d}" for i in range(64)]
+    elif emb_key == "tessera":
+        if "T0" in df_proc.columns:
+            cols = [f"T{i}" for i in range(128)]
+        elif "T00" in df_proc.columns:
+            cols = [f"T{i:02d}" for i in range(128)]
+        else:
+            cols = [c for c in df_proc.columns if c.startswith("T") and c[1:].isdigit()]
+            cols.sort(key=lambda x: int(re.search(r"\d+", x).group()))
+            cols = cols[:128]
+    else:
+        raise ValueError("embedding_type deve ser 'alphaearth' ou 'tessera'.")
+
+    # Padronização dos atributos
+    features = df_proc[cols].to_numpy(dtype=float)
+    features_scaled = StandardScaler().fit_transform(features)
+
+    # Ajuste do t-SNE
+    tsne = TSNE(
+        n_components=n_components,
+        perplexity=perplexity,
+        metric="cosine",
+        random_state=random_state,
+        n_jobs=-1,
+    )
+    coords = tsne.fit_transform(features_scaled)
+
+    for i in range(n_components):
+        df_proc[f"TSNE{i+1}"] = coords[:, i]
+
+    return df_proc, tsne
+
+def plot_tsne(
+    df: pd.DataFrame,
+    n_components: int = 2,
+    label_col: str | None = "label",
+    title: str = "Projeção t-SNE",
+    cores_classes: dict | None = None,
+    point_size: int = 5,
+    alpha: float = 0.7,
+):
+    """Gera visualização 2D ou 3D com Matplotlib usando paleta personalizada ou padrão."""
+    if n_components == 2:
+        plt.figure(figsize=(9, 7))
+        if label_col and label_col in df.columns:
+            for cls in df[label_col].dropna().unique():
+                sub = df[df[label_col] == cls]
+                
+                # Monta os argumentos de plotagem dinamicamente
+                scatter_kwargs = {
+                    "label": str(cls),
+                    "s": point_size * 4,
+                    "alpha": alpha,
+                }
+                if cores_classes and cls in cores_classes:
+                    scatter_kwargs["color"] = cores_classes[cls]
+
+                plt.scatter(sub["TSNE1"], sub["TSNE2"], **scatter_kwargs)
+                
+            plt.legend(title=label_col, bbox_to_anchor=(1.05, 1), loc="upper left")
+        else:
+            plt.scatter(
+                df["TSNE1"], df["TSNE2"], s=point_size * 4, alpha=alpha
+            )
+
+        plt.title(f"{title} (2D)", fontsize=13, fontweight="bold")
+        plt.xlabel("TSNE 1")
+        plt.ylabel("TSNE 2")
+        plt.grid(True, linestyle="--", alpha=0.4)
+        plt.tight_layout()
+        plt.show()
+
+    elif n_components == 3:
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection="3d")
+        if label_col and label_col in df.columns:
+            for cls in df[label_col].dropna().unique():
+                sub = df[df[label_col] == cls]
+                
+                scatter_kwargs = {
+                    "label": str(cls),
+                    "s": point_size * 4,
+                    "alpha": alpha,
+                }
+                if cores_classes and cls in cores_classes:
+                    scatter_kwargs["color"] = cores_classes[cls]
+
+                ax.scatter(sub["TSNE1"], sub["TSNE2"], sub["TSNE3"], **scatter_kwargs)
+                
+            ax.legend(title=label_col, bbox_to_anchor=(1.05, 1), loc="upper left")
+        else:
+            ax.scatter(
+                df["TSNE1"],
+                df["TSNE2"],
+                df["TSNE3"],
+                s=point_size * 4,
+                alpha=alpha,
+            )
+
+        ax.set_title(f"{title} (3D)", fontsize=13, fontweight="bold")
+        ax.set_xlabel("TSNE 1")
+        ax.set_ylabel("TSNE 2")
+        ax.set_zlabel("TSNE 3")
+        plt.tight_layout()
+        plt.show()
     
