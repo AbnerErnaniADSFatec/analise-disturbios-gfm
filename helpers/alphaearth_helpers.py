@@ -1,63 +1,97 @@
-import ee
-import time
 import json
+import time
+from typing import Literal
+
+import ee
+
 # import geemap.foliumap as geemap
 import geopandas as gpd
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import numpy as np
+import rioxarray
+import xarray as xr
 from scipy.interpolate import RectBivariateSpline
 from scipy.signal import savgol_filter
 from sklearn.decomposition import PCA
-
-import numpy as np
-from sklearn.decomposition import PCA
-import xarray as xr
-
+from sklearn.preprocessing import normalize
 
 def compute_pca_rgb(
-    da: xr.DataArray, 
-    n_components: int = 3, 
-    p_min: float = 2.0, 
-    p_max: float = 98.0
+    da: xr.DataArray,
+    n_components: int = 3,
+    metric: Literal["cosine", "euclidean"] = "cosine",
+    p_min: float = 2.0,
+    p_max: float = 98.0,
 ) -> xr.DataArray:
     """Aplica PCA em um DataArray raster e retorna um novo DataArray georreferenciado
 
     composto pelas componentes normalizadas em RGB [0.0, 1.0].
+
+    Parâmetros:
+    ----------
+    da : xr.DataArray
+        Raster com dimensões ('band', 'y', 'x') contendo as bandas/embeddings.
+    n_components : int, padrão 3
+        Número de componentes a extrair (normalmente 3 para RGB).
+    metric : {'cosine', 'euclidean'}, padrão 'cosine'
+        - 'cosine': Aplica normalização L2 nos vetores de cada pixel antes do PCA.
+                    Ideal para embeddings de GFMs (AlphaEarth, Tessera, etc.).
+        - 'euclidean': Executa o PCA diretamente nos dados brutos sem normalização L2.
+    p_min : float, padrão 2.0
+        Percentil inferior para o estiramento de contraste robusto.
+    p_max : float, padrão 98.0
+        Percentil superior para o estiramento de contraste robusto.
     """
+    if metric not in ("cosine", "euclidean"):
+        raise ValueError(
+            f"Métrica inválida: '{metric}'. Escolha 'cosine' ou 'euclidean'."
+        )
+
+
+
     # 1. Garante que as dimensões estejam na ordem padronizada ("band", "y", "x")
     da_std = da.transpose("band", "y", "x")
-    
+
     n_bands = da_std.sizes["band"]
     n_y = da_std.sizes["y"]
     n_x = da_std.sizes["x"]
-    
+
     # 2. Achata para (N_pixels, N_bands)
     flat_data = da_std.values.transpose(1, 2, 0).reshape(-1, n_bands)
 
     # 3. Identifica pixels válidos (ignora NaNs e vetores zerados)
-    valid_mask = ~np.isnan(flat_data).any(axis=1) & ~(flat_data == 0.0).all(axis=1)
+    valid_mask = ~np.isnan(flat_data).any(axis=1) & ~(flat_data == 0.0).all(
+        axis=1
+    )
 
     if not np.any(valid_mask):
-        raise ValueError("O DataArray fornecido não contém dados válidos para ajuste do PCA.")
+        raise ValueError(
+            "O DataArray fornecido não contém dados válidos para ajuste do PCA."
+        )
 
-    # 4. Ajuste e transformação do PCA
-    pca = PCA(n_components=n_components)
-    transformed = pca.fit_transform(flat_data[valid_mask])
+    valid_pixels = flat_data[valid_mask]
 
-    # 5. Normalização Robusta por percentis
+    # 4. Pré-processamento conforme a métrica escolhida
+    if metric == "cosine":
+        # Normalização L2 por linha (cada pixel vira um vetor unitário na hiperesfera)
+        valid_pixels = normalize(valid_pixels, norm="l2", axis=1)
+        print(metric, "regularization complete!")
+
+    # 5. Ajuste e transformação do PCA
+    pca = PCA(n_components=n_components, random_state=42)
+    transformed = pca.fit_transform(valid_pixels)
+
+    # 6. Normalização robusta por percentis para [0.0, 1.0]
     p_low, p_high = np.percentile(transformed, (p_min, p_max), axis=0)
     diff = np.where((p_high - p_low) == 0, 1.0, (p_high - p_low))
     transformed_scaled = np.clip((transformed - p_low) / diff, 0.0, 1.0)
 
-    # 6. Reconstrói a matriz preservando os NaNs nas bordas
+    # 7. Reconstrói a matriz preservando os NaNs nas bordas
     pca_result = np.full((n_y * n_x, n_components), np.nan, dtype=np.float32)
     pca_result[valid_mask] = transformed_scaled
     pca_raster = pca_result.reshape(n_y, n_x, n_components).transpose(2, 0, 1)
 
-    # 7. Cria o novo DataArray georreferenciado
+    # 8. Cria o novo DataArray georreferenciado
     da_pca = xr.DataArray(
         pca_raster,
         dims=["band", "y", "x"],
@@ -67,12 +101,13 @@ def compute_pca_rgb(
             "x": da_std.x,
         },
         attrs={
-            "description": f"PCA ({n_components} components) RGB Composite",
+            "description": f"PCA ({n_components} components) RGB Composite [{metric}]",
             "pca_explained_variance_ratio": pca.explained_variance_ratio_.tolist(),
+            "metric": metric,
         },
     )
 
-    # 8. Herda metadados espaciais
+    # 9. Herda metadados espaciais
     da_pca.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=True)
     if da_std.rio.crs is not None:
         da_pca.rio.write_crs(da_std.rio.crs, inplace=True)

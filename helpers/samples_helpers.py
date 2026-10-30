@@ -26,6 +26,11 @@ from helpers.comparison_helpers import *
 from helpers.samples_helpers import *
 from helpers.simplecube_helpers import *
 
+from typing import Literal
+import pandas as pd
+import re
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import Normalizer, StandardScaler
 
 def count_values_tif(tiff):
     print("Cropped shape:", subset.shape)
@@ -674,7 +679,10 @@ def plot_distribuicao_dados(
 
 
 def calcular_pca_nd(
-    df: pd.DataFrame, n_components: int | float = 2, feature_prefix: str = "A"
+    df: pd.DataFrame,
+    n_components: int | float = 2,
+    feature_prefix: str = "A",
+    metric: Literal["cosine", "euclidean"] = "cosine",
 ) -> tuple[pd.DataFrame, PCA]:
     """Calcula N Componentes Principais para as colunas numéricas e anexa ao DataFrame.
 
@@ -687,13 +695,9 @@ def calcular_pca_nd(
         - Se float (ex: 0.95): extrai dimensões suficientes para reter X% da variância.
     feature_prefix : str, padrão 'A'
         Prefixo das colunas numéricas de interesse.
-
-    Retorna:
-    -------
-    df_result : pd.DataFrame
-        DataFrame com as novas colunas adicionadas ('PC1', 'PC2', ...).
-    pca : PCA
-        Objeto ajustado do sklearn com os atributos de variância e pesos.
+    metric : {'cosine', 'euclidean'}, padrão 'cosine'
+        - 'cosine': Aplica normalização L2 por linha (recomendado para embeddings).
+        - 'euclidean': Aplica padronização por Z-score via StandardScaler.
     """
     # 1. Seleciona e ordena as colunas pelo prefixo (ex: A00 a A63)
     cols = [
@@ -704,8 +708,22 @@ def calcular_pca_nd(
     ]
     cols.sort(key=lambda x: int(re.search(r"\d+", x).group()))
 
-    # 2. Padroniza os dados
-    x_scaled = StandardScaler().fit_transform(df[cols])
+    if not cols:
+        raise ValueError(
+            f"Nenhuma coluna encontrada com o prefixo '{feature_prefix}'."
+        )
+
+    # 2. Pré-processamento conforme a métrica escolhida
+    if metric == "cosine":
+        # Projeta cada amostra (linha) na hiperesfera unitária (norma L2 = 1)
+        x_scaled = Normalizer(norm="l2").fit_transform(df[cols])
+    elif metric == "euclidean":
+        # Padronização estatística por coluna (Z-score)
+        x_scaled = StandardScaler().fit_transform(df[cols])
+    else:
+        raise ValueError(
+            f"Métrica inválida: '{metric}'. Escolha 'cosine' ou 'euclidean'."
+        )
 
     # 3. Ajusta o PCA para N componentes
     pca = PCA(n_components=n_components, random_state=42)
@@ -716,6 +734,7 @@ def calcular_pca_nd(
     df_pcs = pd.DataFrame(pcs, columns=pc_cols, index=df.index)
 
     # 5. Exibe o resumo da variância explicada
+    print(f"--- PCA Summary [{metric.upper()}] ---")
     for i, ratio in enumerate(pca.explained_variance_ratio_):
         print(f"{pc_cols[i]}: {ratio * 100:.2f}% da variância")
     print(f"Total acumulado: {pca.explained_variance_ratio_.sum() * 100:.2f}%\n")
@@ -724,3 +743,4 @@ def calcular_pca_nd(
     df_result = pd.concat([df, df_pcs], axis=1)
 
     return df_result, pca
+    

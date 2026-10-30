@@ -15,6 +15,13 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
 
+from typing import Literal
+import geopandas as gpd
+import pandas as pd
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+from sklearn.preprocessing import Normalizer, StandardScaler
+
 def read_gdf(file):
     samples = pd.read_csv(file)
     if "geometry" in samples.keys():
@@ -432,6 +439,7 @@ def reduce_embeddings(
     embedding_type: str = "alphaearth",
     n_components: int = 2,
     method: str = "pca",
+    metric: Literal["cosine", "euclidean"] = "cosine",
     random_state: int = 42,
 ) -> gpd.GeoDataFrame:
     """Reduz a dimensionalidade dos embeddings (AlphaEarth ou Tessera) em um GeoDataFrame.
@@ -440,12 +448,21 @@ def reduce_embeddings(
     :param embedding_type: 'alphaearth' (64 dims) ou 'tessera' (128 dims).
     :param n_components: Número de dimensões finais (ex: 2, 3, 16, 32).
     :param method: Algoritmo de redução: 'pca' ou 'tsne'.
+    :param metric: 'cosine' (normalização L2 por amostra) ou 'euclidean'
+      (StandardScaler).
     :param random_state: Semente para reprodutibilidade.
     :return: GeoDataFrame com as colunas originais substituídas pelas
-        reduzidas.
+      reduzidas.
     """
     gdf_copy = gdf.copy().reset_index(drop=True)
     emb_type = embedding_type.lower()
+    method = method.lower()
+    metric = metric.lower()
+
+    if metric not in ("cosine", "euclidean"):
+        raise ValueError(
+            f"metric deve ser 'cosine' ou 'euclidean', recebido: '{metric}'."
+        )
 
     # 1. Identificação das colunas de embedding
     if emb_type == "alphaearth":
@@ -461,7 +478,9 @@ def reduce_embeddings(
             ]
         else:
             emb_cols = [
-                f"T{i:02d}" for i in range(128) if f"T{i:02d}" in gdf_copy.columns
+                f"T{i:02d}"
+                for i in range(128)
+                if f"T{i:02d}" in gdf_copy.columns
             ]
     else:
         raise ValueError("embedding_type deve ser 'alphaearth' ou 'tessera'.")
@@ -471,18 +490,23 @@ def reduce_embeddings(
             f"Nenhuma coluna de embedding encontrada para {embedding_type}."
         )
 
-    # 2. Padronização das variáveis (z-score)
+    # 2. Pré-processamento conforme a métrica escolhida
     X = gdf_copy[emb_cols].values
-    X_scaled = StandardScaler().fit_transform(X)
+    if metric == "cosine":
+        # Projeção na hiperesfera unitária (L2 = 1.0 por vetor de pixel)
+        X_scaled = Normalizer(norm="l2").fit_transform(X)
+    else:
+        # Padronização estatística por coluna (z-score)
+        X_scaled = StandardScaler().fit_transform(X)
 
     # 3. Aplicação do algoritmo selecionado
-    method = method.lower()
     if method == "pca":
         reducer = PCA(n_components=n_components, random_state=random_state)
         X_reduced = reducer.fit_transform(X_scaled)
         var_explicada = reducer.explained_variance_ratio_.sum() * 100
         print(
-            f"PCA ({n_components} componentes) - Variância explicada total: {var_explicada:.2f}%"
+            f"PCA ({n_components} componentes) [{metric.upper()}] - "
+            f"Variância explicada total: {var_explicada:.2f}%"
         )
 
     elif method == "tsne":
@@ -490,7 +514,15 @@ def reduce_embeddings(
             raise ValueError(
                 "t-SNE é indicado apenas para visualização em 2 ou 3 dimensões (n_components <= 3)."
             )
-        reducer = TSNE(n_components=n_components, random_state=random_state)
+        # No t-SNE, o sklearn suporta 'cosine' nativamente se metric='cosine',
+        # ou distância euclidiana sobre o espaço normalizado em L2.
+        tsne_metric = "cosine" if metric == "cosine" else "euclidean"
+        reducer = TSNE(
+            n_components=n_components,
+            metric=tsne_metric,
+            random_state=random_state,
+        )
+        # Se metric='cosine', passar X diretamente ou X_scaled funciona de forma consistente
         X_reduced = reducer.fit_transform(X_scaled)
 
     else:

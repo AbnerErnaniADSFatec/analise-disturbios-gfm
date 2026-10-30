@@ -23,6 +23,8 @@ from shapely.geometry import Point
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import MinMaxScaler, RobustScaler, normalize
 
+from typing import Literal
+
 WGS84_WKT = (
     'GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],'
     'PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],'
@@ -164,47 +166,86 @@ def validate_mosaic_pca(da):
     plt.show()
 
 
-def compute_pca_rgb(
-    da: xr.DataArray, 
-    n_components: int = 3, 
-    p_min: float = 2.0, 
-    p_max: float = 98.0
+def compute_pca_rgb_tessera(
+    da: xr.DataArray,
+    n_components: int = 3,
+    metric: Literal["cosine", "euclidean"] = "cosine",
+    p_min: float = 2.0,
+    p_max: float = 98.0,
+    min_norm_threshold: float = 0.05,
 ) -> xr.DataArray:
-    """Aplica PCA em um DataArray raster e retorna um novo DataArray georreferenciado
+    """Aplica PCA em embeddings do Tessera e retorna um DataArray georreferenciado
 
     composto pelas componentes normalizadas em RGB [0.0, 1.0].
+
+    Parâmetros:
+    ----------
+    da : xr.DataArray
+        Raster com dimensões ('band', 'y', 'x') contendo as dimensões de embedding do Tessera.
+    n_components : int, padrão 3
+        Número de componentes a extrair (3 para composição RGB).
+    metric : {'cosine', 'euclidean'}, padrão 'cosine'
+        - 'cosine': Normaliza cada vetor de pixel para norma unitária (L2 = 1.0).
+        - 'euclidean': Mantém a variância das magnitudes originais do embedding.
+    p_min : float, padrão 2.0
+        Percentil inferior para estiramento de contraste robusto.
+    p_max : float, padrão 98.0
+        Percentil superior para estiramento de contraste robusto.
+    min_norm_threshold : float, padrão 0.05
+        Limite mínimo de norma L2 para considerar o pixel válido. Evita que ruídos
+        residuais de borda, nuvens mascaradas ou corpos d'água profundos sejam inflados
+        artificialmente ao dividir por números muito próximos de zero.
     """
-    # 1. Garante que as dimensões estejam na ordem padronizada ("band", "y", "x")
+    if metric not in ("cosine", "euclidean"):
+        raise ValueError(
+            f"Métrica inválida: '{metric}'. Escolha entre 'cosine' ou 'euclidean'."
+        )
+
+    # 1. Padroniza as dimensões para ('band', 'y', 'x')
     da_std = da.transpose("band", "y", "x")
-    
+
     n_bands = da_std.sizes["band"]
     n_y = da_std.sizes["y"]
     n_x = da_std.sizes["x"]
-    
-    # 2. Achata para (N_pixels, N_bands)
+
+    # 2. Achata para matriz 2D: (N_pixels, N_dimensoes_embedding)
     flat_data = da_std.values.transpose(1, 2, 0).reshape(-1, n_bands)
 
-    # 3. Identifica pixels válidos (ignora NaNs e vetores zerados)
-    valid_mask = ~np.isnan(flat_data).any(axis=1) & ~(flat_data == 0.0).all(axis=1)
+    # 3. Identifica pixels válidos com filtro de magnitude contra ruído numérico
+    vector_norms = np.linalg.norm(flat_data, axis=1)
+    valid_mask = (
+        ~np.isnan(flat_data).any(axis=1)
+        & ~np.isinf(flat_data).any(axis=1)
+        & (vector_norms > min_norm_threshold)
+    )
 
     if not np.any(valid_mask):
-        raise ValueError("O DataArray fornecido não contém dados válidos para ajuste do PCA.")
+        raise ValueError(
+            "O DataArray do Tessera não contém pixels válidos após a filtragem."
+        )
 
-    # 4. Ajuste e transformação do PCA
-    pca = PCA(n_components=n_components)
-    transformed = pca.fit_transform(flat_data[valid_mask])
+    valid_pixels = flat_data[valid_mask]
 
-    # 5. Normalização Robusta por percentis
+    # 4. Projeção angular (Cosine) via normalização L2 por linha
+    if metric == "cosine":
+        valid_pixels = normalize(valid_pixels, norm="l2", axis=1)
+        print(metric, "regularization complete!")
+
+    # 5. Ajuste e projeção via PCA
+    pca = PCA(n_components=n_components, random_state=42)
+    transformed = pca.fit_transform(valid_pixels)
+
+    # 6. Normalização robusta por percentis para [0.0, 1.0]
     p_low, p_high = np.percentile(transformed, (p_min, p_max), axis=0)
     diff = np.where((p_high - p_low) == 0, 1.0, (p_high - p_low))
     transformed_scaled = np.clip((transformed - p_low) / diff, 0.0, 1.0)
 
-    # 6. Reconstrói a matriz preservando os NaNs nas bordas
+    # 7. Reconstrói o raster preservando NaNs em áreas inválidas/bordas
     pca_result = np.full((n_y * n_x, n_components), np.nan, dtype=np.float32)
     pca_result[valid_mask] = transformed_scaled
     pca_raster = pca_result.reshape(n_y, n_x, n_components).transpose(2, 0, 1)
 
-    # 7. Cria o novo DataArray georreferenciado
+    # 8. Cria o DataArray georreferenciado e anexa metadados do modelo
     da_pca = xr.DataArray(
         pca_raster,
         dims=["band", "y", "x"],
@@ -214,12 +255,14 @@ def compute_pca_rgb(
             "x": da_std.x,
         },
         attrs={
-            "description": f"PCA ({n_components} components) RGB Composite",
+            "description": f"Tessera SITS PCA ({n_components} components) RGB Composite",
+            "metric": metric,
             "pca_explained_variance_ratio": pca.explained_variance_ratio_.tolist(),
+            "valid_pixels_count": int(np.sum(valid_mask)),
         },
     )
 
-    # 8. Herda metadados espaciais
+    # 9. Herda metadados espaciais rioxarray
     da_pca.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=True)
     if da_std.rio.crs is not None:
         da_pca.rio.write_crs(da_std.rio.crs, inplace=True)
