@@ -495,6 +495,7 @@ def reduce_embeddings(
     if metric == "cosine":
         # Projeção na hiperesfera unitária (L2 = 1.0 por vetor de pixel)
         X_scaled = Normalizer(norm="l2").fit_transform(X)
+        print("cosine")
     else:
         # Padronização estatística por coluna (z-score)
         X_scaled = StandardScaler().fit_transform(X)
